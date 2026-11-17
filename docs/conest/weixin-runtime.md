@@ -91,4 +91,6 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 
 新构建的开发机 Runtime 重启检查也通过：无 GitHub 启动正常，已完成工单和 sent 回执保留，effects 为空，检查进程已停止。这不是 Windows/WSL 或整机重启验收。
 
+Docker `v0.1.0-m0.1` 已在 [GitHub Release](https://github.com/cc8887/CoNest/releases/tag/v0.1.0-m0.1)发布。Linux/amd64 CI 验证了镜像构建、1251 项测试、非 root 与只读配置、无真实渠道流量的主 Runtime 启动和容器重启；附件校验值已核对。具体网络与数据卷要求见 [Docker 部署](docker.md)。这仍不替代 N100 的实机收件、容量和 Windows 生命周期验收。
+
 N100 已确认 Windows 11 专业版 `10.0.26200.9974`、15.8 GB 内存、WSL `2.7.14.0`、Ubuntu WSL2/x86_64。当前 Node `18.19.1` 与 pnpm `10.2.1` 需先升级私有工具链。真机运行、常驻与重启恢复、100 个未完成任务的容量尚未实测。用户暂无第二个微信账号，真实双账号验收暂缓。

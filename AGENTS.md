@@ -26,4 +26,5 @@
 
 - 新构建在开发机的 Runtime 重启恢复检查通过：completed 工单及 sent 回执保留、effects 为空、无 GitHub setup 错误。`.artifacts/conest-weixin-source.tar.gz` 不含密钥/状态。N100 设备与工具链输出已取得，接下来在 Ubuntu 升级私有工具链并安装构建，步骤见 `docs/conest/n100-wsl.md`；尚未完成真机运行验收。
 
-- 用户已授权提交代码并构建 Docker 发布到私有仓库 Release。发布目标 `v0.1.0-m0.1`，linux/amd64 镜像作为可 docker load 的附件交付；无本地 Docker 引擎，使用 GitHub Actions 构建与启动/重启检查，通过后再公布预发布。镜像不包含模型或微信凭证。
+- 用户已授权提交代码并构建 Docker 发布到私有仓库 Release。`v0.1.0-m0.1` 已发布，代码为 `45f9594b06426558ccc88d48c6cc5fc695172bf1`，地址 `https://github.com/cc8887/CoNest/releases/tag/v0.1.0-m0.1`。6 个附件含 linux/amd64 Docker 归档（327218144 字节）、源码、Compose、模型配置模板、部署说明及 SHA256SUMS；镜像不含真实凭证或私聊。
+- Docker 的 Linux CI 已通过 1251 项测试、架构与非 root 检查、只读根文件系统/noexec 临时目录下的主 Runtime 启动和重启。最终采用 Linux host 网络，保留 SuperAgent 管理层的回环监听要求；Docker Desktop 需要启用 host networking。原生加载器设置 `NARB_DISABLE_NATIVE_CACHE=1`，从只读镜像加载原生库。不要把它改回 wildcard 管理监听或从 noexec /tmp 加载动态库。部署见 `docs/conest/docker.md`，N100/Windows/Podman 的现场运行仍待验收。
