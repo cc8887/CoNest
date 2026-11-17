@@ -399,8 +399,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/family/domain.ts` | CoNest records only: `Member`, `IdentityBinding`, `ConversationScope`, `TaskAccess`, `MemoryGrant`, `AttentionTarget`, and `emptyDirectory`. Not a Ticket store, and not imported by the plugin |
 | `src/family/authorize.ts` | Pure default-deny `authorize` for those records. The Runtime does not call it |
 | `src/family/index.ts` | Re-exports of that unwired family module |
+| `src/ingress/not-connected.ts` | TDD stub for message-stream ingress: unified inbound message, reply route, per-instance isolation, proactive DM push, and a gateway-shaped sidecar mapping. Every operation throws `IngressNotConnected`. Not imported by the plugin, not registered as a Source, and not an Octop runtime |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled. `src/ingress/not-connected.ts` is not one of those entries. The Runtime does not import it, and the bundle does not register it.
 
 ## Tests
 
@@ -448,6 +449,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
 | `tests/family-authorization.spec.ts` | Default-deny decisions of `authorize` in `src/family/authorize.ts`. It does not boot the Engine or the Store |
+| `tests/message-ingress.spec.ts` | Message-stream ingress contracts (normalization, same-conversation reply, channel isolation, proactive DM push, gateway sidecar shape) plus the gaps that already hold: group membership stays `group_membership_unmodeled`, the stub is not wired, and WeChat / iLink are not registered. Cases named `contract:` call the stub and fail until ingress is connected. No model API key |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
 

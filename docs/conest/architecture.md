@@ -77,7 +77,9 @@
 
 本次没有添加 Source 骨架。`SourceKind` 的最小对象虽然能写出来，但没有真实传输时，注册进去只会变成一个不会失败的空壳。下一个接缝就是上面这一条注册路径。
 
-微信、WeChat Claw、iLink 的群支持没有对照官方能力核实。不要把飞书适配器改名成微信，也不要在未核实的接口上做群收发。
+信息流接入还没有接到运行时。`src/ingress/not-connected.ts` 只放契约类型，每次调用都抛出 `IngressNotConnected`。`tests/message-ingress.spec.ts` 写这些契约：标明 `contract:` 的用例在桩被替换之前会失败；标明 `current:` 或 `unimplemented:` 的用例核对已经成立的拒绝，以及桩没有接入插件入口、`cordis.patch.yml`、`package.json` 导出和 `tsdown.config.ts`。这里不引入 Octop 的代码，也不把它做成运行时依赖。
+
+微信、WeChat Claw、iLink 的群支持没有对照官方能力核实。不要把飞书适配器改名成微信，也不要在未核实的接口上做群收发。测试只断言这些名字没有注册成 Source。
 
 接入新 Source 时，家庭绑定使用该 Source 自己的发送者 id。在绑定被宿主执行之前，新 Source 只具有上游原型那种按渠道账号允许的能力。
 
