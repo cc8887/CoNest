@@ -42,3 +42,5 @@
 - 网页收尾复测曾有一次原生 mock 回执关联断言 `0 !== 1`，失败日志为忽略目录 `.artifacts/portal-native-final.log`；当时未保留临时状态，不能把后续通过当作已定位根因。补充了错误堆栈和每工单回执断言；随后连续 7 轮 10 租户/100 工单通过（包括两个带 37ms 调度扰动的原生进程）。另修正 mock SSE response id 在异步处理中读取全局计数可能重复的问题，固定为请求自己的序号；尚未证明该问题导致之前断言。此待复现项需在后续发布验收继续跟进，不宣称已修复生产回执缺陷。模拟进程和私有临时状态已清理，保留脱敏日志、报告与页面截图。
 
 - 发布 v0.2.0-alpha.1 期间用户要求默认启动进入自己的 CoNest 后台，不能先显示 DSH 首页。`src/app/http.ts` 为 `/` 注册精确入口，在 DSH Connection.authorizeIndex 完成 launch-token 兑换/签名 Cookie 检查后直接在根地址呈现后台（`/orchestrator/registration/` 仍可访问）；路由在 Runtime 首次 await 前安装，避免启动浏览器时落入 DSH fallback。原 DSH 管理页面保留在 `/index.html`，CoNest 侧栏“高级控制台”可打开，认证保持不变。网页与发布验收均须检查默认页面和高级入口。
+
+- v0.2.0-alpha.1 发布验收已复现先前 `0 !== 1`：失败工单归属与 id 正确，报告为“身份校验”，回执却为“身���校验”；模拟模型请求记录中已含替换字符。根因是 `scripts/mock-runtime.mjs` 用 `raw += Buffer` 逐块解码 HTTP 请求，UTF-8 中文跨块时损坏。现由 `scripts/mock-http.mjs` 在拼接全部 Buffer 后解码，新增 `tests/mock-http.spec.ts` 在 Node 24 下先红后绿，覆盖所有分割位置、逐字节中文/emoji 和无效 JSON。此结论取代先前“待复现”的记忆，不是生产权限或工单归属缺陷。Linux 容器报告改放测试数据卷 `/data` 后提取，避免容器停止时 tmpfs 被清空；清理时移除该测试容器自己的匿名卷。

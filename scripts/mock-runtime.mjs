@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DatabaseSync } from 'node:sqlite'
+import { readModelRequest } from './mock-http.mjs'
 
 process.umask(0o077)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -54,9 +55,7 @@ const finalText = (member, task) => `MOCK_RESULT_${member}_${task}：身份校�
 const model = createServer(async (req, res) => {
   try {
     assert.equal(req.url, '/v2/chat/completions')
-    let raw = ''
-    for await (const chunk of req) raw += chunk
-    const body = JSON.parse(raw)
+    const body = await readModelRequest(req)
     assert.equal(body.stream, true)
     assert.equal(body.model, 'hy4')
     requests.push(body)

@@ -123,7 +123,7 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 
 单独运行 `pnpm exec vitest run tests/weixin-members.spec.ts` 可验证成员权限和共享队列；其中 DSH agents 是替身。`pnpm test:local-mock` 则运行真实 DSH，先积压 100 个工单、在队列中途重启，再完成所有工单并逐条核对投递。回传由 mock iLink 捕获，模型为本地 OpenAI SSE 脚本；未据此声称 10 个真实微信账号、真实 hy4 并发性能或 N100 容量已经验收。旧的 `tests/multiuser-readiness.spec.ts` 保留旧单 owner 的兼容性与通用调度回归。
 
-本次收尾曾出现一次回执关联断言失败，临时状态当时未保留，尚未定位根因。增加诊断信息后连续 7 轮通过，其中两轮有模型响应调度扰动。mock SSE 的响应 id 已固定为每请求唯一；目前不能证明它与先前失败的因果关系。此记录保留为后续发布验收待复现项，不将重复通过描述为该故障已修复。
+早先收尾的偶发回执文字断言已复现并定位：mock 模型服务逐个 Buffer 解码 HTTP 请求，中文字符跨块时产生替换字符，随后被脚本模型回传。工单 id 和成员归属一致，数据库报告原文也正确。`scripts/mock-http.mjs` 改为完整拼接后解码；`tests/mock-http.spec.ts` 覆盖所有字节分割位置、逐字节传输和不完整 JSON。该修复针对测试接收端，发布前继续运行真实 DSH 与 Linux 镜像全链路。
 
 ## 恢复与边界
 

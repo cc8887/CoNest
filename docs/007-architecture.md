@@ -477,6 +477,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/multiuser-readiness.spec.ts` | Legacy single-owner compatibility and 100 Tickets from simulated Feishu requesters through the shared scheduler; not member isolation acceptance |
 | `tests/weixin-members.spec.ts` | Ten pinned Weixin members: private routers and reads, foreign-id refusal, Attention/followup/result routing, disabled members and 100 Tickets through one durable queue |
 | `tests/portal.spec.ts` | Web creation, QR/PIN enrollment, automatic allowlists, one-time login, tenant/auth boundaries and scoped web tasks |
+| `tests/mock-http.spec.ts` | Native mock HTTP JSON decoding at every UTF-8 buffer boundary, preserving private Chinese reports |
 | `tests/container.spec.ts` | Private container profile setup, retained operator edits, state-path and model-endpoint guards |
 | `tests/m0-login.spec.ts` | Real QR listener capability and Host checks on loopback and explicit container listeners |
 

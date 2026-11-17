@@ -7,7 +7,7 @@ conest_volume=$(docker volume create)
 conest_container=''
 conest_mock_container=''
 cleanup() {
-  if [[ -n "$conest_mock_container" ]]; then docker rm -f "$conest_mock_container" >/dev/null 2>&1 || true; fi
+  if [[ -n "$conest_mock_container" ]]; then docker rm -f -v "$conest_mock_container" >/dev/null 2>&1 || true; fi
   if [[ -n "$conest_container" ]]; then docker rm -f "$conest_container" >/dev/null 2>&1 || true; fi
   docker volume rm "$conest_volume" >/dev/null 2>&1 || true
   rm -rf -- "$conest_temporary"
@@ -91,18 +91,18 @@ conest_mock_container=$(docker create --read-only --tmpfs /tmp:size=536870912,mo
   --cap-drop ALL --security-opt no-new-privileges:true --memory 2g --cpus 2 --network none \
   -v "$PWD/scripts:/opt/conest/scripts:ro" -v "$PWD/tests/fixtures:/opt/conest/tests/fixtures:ro" \
   -e CONEST_MOCK_DSH_BIN=/opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js \
-  -e CONEST_MOCK_REPORT=/tmp/container-mock-report.json -e CONEST_MOCK_DIAGNOSTICS=/tmp/container-mock-diagnostics.json \
+  -e CONEST_MOCK_REPORT=/data/container-mock-report.json -e CONEST_MOCK_DIAGNOSTICS=/data/container-mock-diagnostics.json \
   -e CONEST_MOCK_JITTER_MS=37 --entrypoint node "$conest_image" /opt/conest/scripts/mock-runtime.mjs)
 conest_mock_status=0
 docker start -a "$conest_mock_container" > .artifacts/container-mock.log 2>&1 || conest_mock_status=$?
 conest_mock_exit=$(docker inspect --format '{{.State.ExitCode}}' "$conest_mock_container")
 if [[ "$conest_mock_exit" != 0 ]]; then conest_mock_status=$conest_mock_exit; fi
 if [[ "$conest_mock_status" != 0 ]]; then
-  docker cp "$conest_mock_container:/tmp/container-mock-diagnostics.json" .artifacts/container-mock-diagnostics.json >/dev/null 2>&1 || true
+  docker cp "$conest_mock_container:/data/container-mock-diagnostics.json" .artifacts/container-mock-diagnostics.json >/dev/null 2>&1 || true
   tail -100 .artifacts/container-mock.log
   exit "$conest_mock_status"
 fi
-docker cp "$conest_mock_container:/tmp/container-mock-report.json" .artifacts/container-mock-report.json >/dev/null
+docker cp "$conest_mock_container:/data/container-mock-report.json" .artifacts/container-mock-report.json >/dev/null
 python3 - .artifacts/container-mock-report.json <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
