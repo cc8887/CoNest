@@ -11,6 +11,10 @@ cleanup() {
   rm -rf -- "$conest_temporary"
 }
 trap cleanup EXIT
+mkdir -p "$conest_temporary/deployment/secrets"
+cp compose.yml "$conest_temporary/deployment/compose.yml"
+cp containers/model-test.env.example "$conest_temporary/deployment/secrets/model-test.env"
+docker compose -f "$conest_temporary/deployment/compose.yml" config --quiet
 [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$conest_image")" == linux/amd64 ]]
 [[ "$(docker run --rm --entrypoint id "$conest_image" -u)" == 1000 ]]
 docker run --rm "$conest_image" m0 doctor > "$conest_temporary/doctor.json"

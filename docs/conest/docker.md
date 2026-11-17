@@ -38,7 +38,7 @@ docker compose logs -f conest
 
 `init` 从同一数据卷中的 M0 绑定导出一个账号，创建原有 `orchestrator.sqlite`，默认禁用 GitHub/飞书并配置单 worker。已有数据库时拒绝覆盖，重启只需 `docker compose up -d`。多个 M0 绑定需用 `init --account <bot-id>` 明确选择。迁移已有账号可在卷中放置私有 `weixin-account.json`，需匹配 UID 1000 和 0600 权限；不要复制他人的状态或复用旧主 Session 换 owner。
 
-服务日志会输出带访问凭据的管理地址，按私有信息保管。容器内部监听 `0.0.0.0` 以支持端口映射；Compose 只发布宿主 `127.0.0.1:3087/3088`，不要改成公网或局域网监听。扫码网页仍校验随机路径、Host 和 PIN POST 的同源条件。主 Runtime 面板继续校验认证与同源请求。
+服务日志会输出带访问凭据的管理地址，按私有信息保管。日志中的管理地址若使用 `0.0.0.0:3088`，浏览器访问时只将主机名换成 `127.0.0.1:3088`，保留原 token。容器内部监听 `0.0.0.0` 以支持端口映射；Compose 只发布宿主 `127.0.0.1:3087/3088`，不要改成公网或局域网监听。扫码网页仍校验随机路径、Host 和 PIN POST 的同源条件。主 Runtime 面板继续校验认证与同源请求。
 
 数据都在 `conest-data` 卷：`m0/` 绑定与连接日志、`weixin-account.json`、`runtime/` 工单与投递状态、`dsh/` profile 与 Session、`home/` 宿主缓存。镜像升级不应删除该卷。`docker compose down` 停止服务并保留数据；`down -v` 会删除数据，不作为普通停止或升级命令。
 
