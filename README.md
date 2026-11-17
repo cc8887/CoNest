@@ -1,10 +1,10 @@
 # CoNest 共栖
 
-开发中。已提供微信单账号私聊 Source 和 M0 连接验证入口；家庭助手仍在开发，也不是 DeepSeek 或腾讯的官方产品。
+开发中。已提供网页成员注册、微信扫码自动绑定、独立个人空间、私有路由 Session、工单权限隔离和共享队列；家庭共享等能力仍在开发，也不是 DeepSeek 或腾讯的官方产品。
 
-CoNest（共栖）打算做成面向家庭和小组、可自托管的助手：以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 的研究原型 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype) 为唯一的工单、Attention 与报告状态机，渠道沿用 Source 接口，新增绑定本人私聊的微信适配器。家庭领域模块尚未接入运行时。
+CoNest（共栖）面向家庭和小组自托管：以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 的研究原型 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype) 为唯一的工单、Attention 与报告状态机，渠道沿用 Source 接口。宿主 `Members` 模块执行持久化身份绑定、成员私有 Session 和读写范围检查。
 
-English: CoNest is a private research fork of the DSH SuperAgent prototype with a single-owner Weixin Source and a standalone M0 connectivity probe. The family-domain skeleton is not wired into the agent. It is not an official DeepSeek or Tencent product or a working multi-member assistant.
+English: CoNest is a private research fork of DSH SuperAgent with pinned Weixin member identities, private routing sessions, host-enforced task access and one shared queue. Each member is a separate tenant with a personal web interface. Web enrollment of ten members and 100 tasks are verified locally with real DSH and mock channel/model I/O. It is not an official DeepSeek or Tencent product.
 
 ## 现在能说明什么
 
@@ -20,13 +20,11 @@ English: CoNest is a private research fork of the DSH SuperAgent prototype with 
 
 ## 还没有实现，不能当成已经具备
 
-下列能力只出现在设计里。[家庭领域骨架](src/family/index.ts) 里的类型和 `authorize` 没有被插件调用。测试只证明这个纯函数的判断，不证明运行中的 Session 会拒绝越权。
+成员私有工单由运行时 `Members` 模块执行授权。[家庭领域骨架](src/family/index.ts) 中的共享记忆、参与者和群名单仍为设计，纯函数 `authorize` 没有被插件调用。尚未提供：
 
-- 多个家庭成员各自的私聊，以及成员之间的群协作
-- 把渠道账号稳定绑定到成员，并在运行时执行这套绑定
+- 成员之间的群协作
 - 默认私有的记忆，以及必须显式记录的家庭共享
-- 工单的可见性、所有者与参与者
-- 把问题发给被授权的那一位成员，并和具体工单、Attention 对齐，重启后仍然投递
+- 私有工单的跨成员共享与参与者授权
 - 后台任务，以及带预算上限的长期目标
 - 微信、WeChat Claw、iLink 的群。官方群能力尚未核实，这里不实现，也不承诺
 
@@ -37,11 +35,11 @@ English: CoNest is a private research fork of the DSH SuperAgent prototype with 
 - [架构决定](docs/conest/architecture.md)：仓库边界、提议中的内核扩展点、Source 下一步接缝
 - [多用户开发方案](docs/conest/development-plan.md)：Windows 与 WSL 部署、微信优先、约 10 人与 100 个未完成任务的设计，以及成员隔离、hy4 和分阶段验收
 - [M0 运行与验证](docs/conest/m0.md)：微信扫码与 PIN、本机私聊验证、真实 DSH 工具调用、配置与恢复
-- [微信主 Runtime 部署](docs/conest/weixin-runtime.md)：微信进入真实工单、hy4 配置、单账号部署与恢复
+- [微信主 Runtime 部署](docs/conest/weixin-runtime.md)：微信进入真实工单、hy4 配置、网页注册、个人空间与恢复
 - [N100 / WSL2 现场步骤](docs/conest/n100-wsl.md)：已确认的设备信息、私有工具链安装与构建检查
 - [Docker 部署](docs/conest/docker.md)：linux/amd64 镜像、数据卷、扫码绑定与主 Runtime 启动
 - [上游来源与更新方式](docs/conest/provenance.md)：精确的上游地址、提交和工具链版本
-- [安全说明](SECURITY.md)：继承的执行权限，以及为什么现在不能当多用户系统
+- [安全说明](SECURITY.md)：继承的执行权限，成员权限、网页入口与执行边界
 - 上游安装与行为文档仍从 [SETUP.md](SETUP.md) 和 [000 Philosophy](docs/000-philosophy.md) 读起。`SETUP.md` 会引导操作者创建真实账号并写入本机凭证。最初初始化未执行该流程；后续微信现场测试已由用户扫码授权。
 
 编号文档 [001](docs/001-domain.md) 到 [008](docs/008-cookbook.md) 是上游原型的领域说明，没有改写成 CoNest 的产品承诺。
@@ -62,11 +60,11 @@ pnpm check
 
 `pnpm check` 依次做类型检查、测试和构建。测试不需要模型 API 密钥。家庭授权测试在 `tests/family-authorization.spec.ts`，随 `pnpm test` 一起跑。
 
-微信主链路已接入原有 Store、Engine、Ticket、Attention 和 outbox；`sources.github.enabled: false` 的部署可不配置 GitHub 账号。新增命令 `pnpm weixin:setup` 为一个绑定用户初始化独立状态，默认 1 个 worker。步骤见[微信主 Runtime 文档](docs/conest/weixin-runtime.md)。
+微信主链路复用原有 Store、Engine、Ticket、Attention 和 outbox，可禁用 GitHub。`pnpm weixin:setup --web --state-dir /absolute/state` 初始化空成员目录，默认 1 个 worker。管理员登录 DSH 后，从 **Superagent → 来源 → 成员注册与微信绑定** 创建成员；系统生成二维码，扫码确认后自动保存凭证、关联成员并加入允许名单。每位成员就是一个独立租户，通过管理员交付的一次性链接进入自己的网页，可提交任务、查看结果、回复追问、停止和重试。个人页面默认监听 `127.0.0.1:3089`，DSH 管理端保留在 `127.0.0.1:3088`。原单 owner / `--members-file` 初始化保留兼容。步骤见[微信主 Runtime 文档](docs/conest/weixin-runtime.md)。
 
-M0 仍保留 `pnpm m0 model/login/weixin` 供排查连接。M0 已完成真实 DSH/hy4 工具往返及手机收件确认；它自身不创建工单。消息接入抛错桩已被真实映射替换，当前全量检查为 1251 项测试通过，类型检查与构建通过。
+M0 保留 `pnpm m0 model/login/weixin` 供排查连接，已完成真实 DSH/hy4 与手机收件确认；它自身不创建工单。`pnpm test:local-mock` 独立启动真实 DSH/Runtime，通过网页创建并模拟扫码绑定 10 个成员，验证 100 个工单、排队重启、私聊追问、越权拒绝及原账号回传，不需要真实凭证。`pnpm check` 覆盖全部回归、类型检查与构建。
 
-自托管的目标机器是 Intel N100，已确认 Windows 11 专业版、15.8 GB 内存、WSL 2.7.14.0 与 Ubuntu WSL2/x86_64。产品面向约 10 人的小家庭或小团队，优先微信机器人，使用云端推理；目标是最多约 100 个未完成任务，允许排队。方案以 WSL2 内运行、单 worker 起步。尚无真机容量测量，微信 Source 当前仅接受一位绑定 owner 的文本私聊，多成员隔离尚未实现。
+目标机器是 Intel N100，已确认 Windows 11 专业版、15.8 GB 内存、WSL 2.7.14.0 与 Ubuntu WSL2/x86_64。面向约 10 人，云端推理，100 个未完成任务允许排队，单 worker 起步。成员各自绑定账号 owner；单机器人接收任意陌生人或微信群不在当前范围。N100 性能与多个真实微信绑定仍待现场验证。`v0.2.0-alpha.1` 打包网页成员注册、个人空间和多成员共享队列；旧 `v0.1.0-m0.1` 仍是单 owner 版本。部署与升级按对应 Release 附件说明执行。
 
 ## 许可
 

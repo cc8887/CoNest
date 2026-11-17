@@ -3,7 +3,7 @@
  * allowed member Alice (`ou_alice`), listened chat `oc_team`, and `auto` eval mode. Stop it with `stop()`.
  */
 import { Context } from '@deepseek-ai/cordis'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi, type Mock } from 'vitest'
@@ -17,6 +17,7 @@ import { Commands } from '../../src/infra/commands.ts'
 import { credentialHelper, workerGitConfig } from '../../src/infra/environment.ts'
 import type { Trigger } from '../../src/core/index.ts'
 import { testMachine } from './deployment.ts'
+import type { WeixinClient } from '../../src/sources/weixin-api.ts'
 
 export const MEMBER = 'ou_alice'
 export const CHAT = 'oc_team'
@@ -132,12 +133,14 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
 }
 
 /** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void) {
+export async function startRuntime(seed?: (store: Store) => void, options: { database?: string; members?: readonly string[]; portal?: boolean; weixin?: WeixinClient } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
+  if (options.database) copyFileSync(options.database, join(directory, 'orchestrator.sqlite'))
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
   const repository = { default_branch: 'master', permissions: { push: true } }
   vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : repository)
-  vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: [{ member_id: MEMBER, name: 'Alice' }], has_more: false })
+  const members = (options.members ?? [MEMBER]).map(id => ({ id, name: id === MEMBER ? 'Alice' : id }))
+  vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: members.map(member => ({ member_id: member.id, name: member.name })), has_more: false })
   vi.spyOn(Commands.prototype, 'git').mockResolvedValue('')
   vi.spyOn(Commands.prototype, 'run').mockResolvedValue('{"ok":true,"data":{}}')
   const scoped = 'git config -z --show-scope --get-regexp ^(credential\\..*|http\\..*extraheader)$'
@@ -243,18 +246,19 @@ export async function startRuntime(seed?: (store: Store) => void) {
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
+  if (options.portal) ctx.reflect.provide('connection', { requestRejection: (req: { headers: Record<string, string> }) => req.headers.authorization === 'Bearer test-operator' ? undefined : 401 })
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
   const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }
   seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
   seed?.(seeded)
   seeded.close()
-  const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), vi.fn())
+  const runtime = new Runtime(ctx, testMachine({ stateDir: directory, ...options.portal ? { portal: { host: '127.0.0.1', port: 0 } } : {} }), vi.fn(), { weixin: options.weixin, bindingPollMs: options.weixin ? 10 : undefined })
   await runtime.ready
   runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
   const settings = runtime.store.settings()
   runtime.store.saveSettings({ ...settings, eval: { ...settings.eval, mode: 'auto' },
-    policy: { ...settings.policy, sources: { ...settings.policy.sources, feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } },
+    policy: { ...settings.policy, sources: { ...settings.policy.sources, feishu: { allowed: members, syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } },
     sources: { ...settings.sources, feishu: settings.sources.feishu?.enabled === false ? settings.sources.feishu
       : { enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
@@ -289,12 +293,20 @@ export async function startRuntime(seed?: (store: Store) => void) {
     await http(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
     return { status, body: JSON.parse(text) as Record<string, unknown> }
   }
+  async function registration(method: string, path: string, json?: unknown, headers: Record<string, string> = {}) {
+    let status = 0, text = ''
+    const chunks = json === undefined ? [] : [Buffer.from(JSON.stringify(json))]
+    const req = { method, url: `/orchestrator/registration/${path}`, headers: { host: '127.0.0.1:3082', origin: 'http://127.0.0.1:3082',
+      'x-orchestrator-request': '1', authorization: 'Bearer test-operator', ...headers }, async *[Symbol.asyncIterator]() { yield* chunks } }
+    await http(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
+    return { status, body: JSON.parse(text) as Record<string, any> }
+  }
   async function stop() { await runtime.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) }
   /** The Session's model takes its next step, which takes the messages steered in since its last. */
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** A step of the worker claims what waits for it, and is cut off before the Session took it. */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, registration, controller, subprocess, hooks, resolveDefault, stop,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

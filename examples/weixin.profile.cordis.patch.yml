@@ -1,5 +1,5 @@
-# Single bound owner, text-only Runtime. Replace stateDir with an absolute path.
-# Credentials and identity are initialized by pnpm weixin:setup, not stored here.
+# Pinned owner or member directory, text-only Runtime. Replace stateDir with an absolute path.
+# Use pnpm weixin:setup --web, then enroll members in the authenticated webpage. Credentials stay in private state.
 - id: webserver
   config:
     host: 127.0.0.1

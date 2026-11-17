@@ -1,9 +1,11 @@
 /** Container profile persistence and startup guards, without Docker or external services. */
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readlinkSync, existsSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readlinkSync, existsSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, expect, it } from 'vitest'
+import { Store } from '../src/app/store.ts'
+import { build } from 'tsdown'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -38,11 +40,28 @@ it('refuses state inside the image application directory', () => {
   expect(existsSync(join(app, 'state'))).toBe(false)
 })
 
-it('requires explicit binding and initialization before serving', () => {
-  const { run } = fixture()
-  const result = run('start')
-  expect(result.status).toBe(1)
-  expect(result.stderr).toContain('m0 login')
+it('bootstraps an empty web-enrollment Store on first start without requiring an exported Weixin account', async () => {
+  const { app, data, run } = fixture()
+  mkdirSync(join(app, 'lib'), { recursive: true })
+  writeFileSync(join(app, 'package.json'), '{"name":"dsh-superagent","type":"module"}')
+  symlinkSync(resolve('node_modules'), join(app, 'node_modules'), 'dir')
+  symlinkSync(resolve('skills'), join(app, 'skills'), 'dir')
+  symlinkSync(resolve('prompts'), join(app, 'prompts'), 'dir')
+  // Build the real initializer into this isolated app; clean checkouts have no lib before pnpm check's build phase.
+  await build({ config: false, entry: { 'weixin-setup': resolve('src/weixin-setup.ts') }, outDir: join(app, 'lib'), format: 'esm', platform: 'node',
+    target: 'es2024', fixedExtension: false, dts: false, logLevel: 'silent', deps: { alwaysBundle: [/^(?!node:)/] } })
+  const dsh = join(app, 'mock-dsh.mjs'); writeFileSync(dsh, 'console.log("DSH fixture started")')
+  const result = run('start', { CONEST_TEST_API_KEY: 'private-bootstrap-key', CONEST_DSH_BIN: dsh })
+  expect(result.status, result.stderr).toBe(0)
+  expect(result.stdout).toContain('DSH fixture started')
+  expect(result.stdout + result.stderr).not.toContain('private-bootstrap-key')
+  expect(existsSync(join(data, 'weixin-account.json'))).toBe(false)
+  const store = new Store(join(data, 'runtime/orchestrator.sqlite'))
+  try {
+    expect(store.settings().sources.weixin?.config).toMatchObject({ members: [], accounts: [] })
+    expect(store.settings().sources.github?.enabled).toBe(false)
+    expect(store.settings().executor.maxWorkers).toBe(1)
+  } finally { store.close() }
 })
 
 it('rejects model endpoint changes before launching DSH and never prints the API key', () => {

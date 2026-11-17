@@ -11,9 +11,14 @@ import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
-/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
+/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` or portal listener settings remounts the plugin. */
 export const Config = s.object({
   stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
+  portalHost: s.string().default('127.0.0.1').description('Personal tenant listener, separate from DSH management. A concrete IP; remote listeners require TLS.'),
+  portalPort: s.natural().max(65535).default(3089).description('Personal tenant web port; 0 chooses a free port.'),
+  portalOrigin: s.string().default('').description('Optional public HTTPS origin of a reverse proxy forwarding only the personal portal.'),
+  portalTlsCertFile: s.string().default('').description('Optional absolute TLS certificate file for the personal portal.'),
+  portalTlsKeyFile: s.string().default('').description('Optional absolute TLS key file for the personal portal.'),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
     .description('Largest saved prompt configuration, in characters.').volatile(),
   admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
@@ -24,6 +29,7 @@ export const Config = s.object({
 export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
   stateDir: string
+  portal?: { host: string; port: number; origin?: string; certFile?: string; keyFile?: string }
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
@@ -39,7 +45,8 @@ export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
   const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
+  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs,
+    portal: { host: config.portalHost, port: config.portalPort, origin: config.portalOrigin, certFile: config.portalTlsCertFile, keyFile: config.portalTlsKeyFile } }
 }
 
 export const GithubAccountsSchema = z.object({
@@ -50,7 +57,7 @@ export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
   github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape),
-  weixin: ['credentialsFile', 'accountId', 'ownerId'],
+  weixin: ['credentialsFile', 'accountId', 'ownerId', 'members', 'accounts'],
 }
 
 export interface Deployment extends Machine {

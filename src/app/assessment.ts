@@ -2,7 +2,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
 import { reasonText, threadKey, type Assessor, type AssessmentOutcome, type Candidate, type EngineForMainSession,
-  type Trigger } from '../core/index.ts'
+  type Trigger, type Ticket } from '../core/index.ts'
 import { AdmissionDirectionSchema, RuleAssessmentSchema, assessmentOutcome, directionAllowed, type Settings } from '../policy.ts'
 import { checkedImText } from '../infra/text.ts'
 import type { Commands } from '../infra/commands.ts'
@@ -61,6 +61,7 @@ export interface AssessorHost {
   /** Delivers a candidate card to the main Session once per request ID, resolving after the Session receives it. */
   deliver(requestId: string, text: string): Promise<void>
   candidateCard(candidate: Candidate): Promise<Record<string, unknown>>
+  visibleTicket?(trigger: Trigger, ticket: Ticket): boolean
 }
 
 /** Schema for bounded context or repository read requests during an active evaluation (`orchestrator_eval_read`). */
@@ -94,7 +95,7 @@ export class MasterAssessor implements Assessor {
   constructor(private readonly host: AssessorHost) {
     // Start the evaluation deadline only after the main Session receives the candidate card, so a busy Session does not consume evaluation time.
     host.effects.handle('assessment', async ({ triggerId }, evalId) => {
-      const candidate = this.host.engine.candidate(triggerId)
+      const candidate = this.candidate(triggerId)
       if (candidate?.evalId !== evalId) return
       await this.host.deliver(`candidate:${evalId}`, JSON.stringify({ kind: 'candidate', ...await this.host.candidateCard(candidate) }))
       this.host.engine.candidateDelivered(evalId)
@@ -102,13 +103,18 @@ export class MasterAssessor implements Assessor {
   }
   /** Enqueues an `assessment` effect to deliver `candidate`'s card to the main Session. */
   request(candidate: Candidate): void { this.host.effects.enqueue('assessment', candidate.evalId, { triggerId: candidate.triggers[0]!.id }) }
+  private candidate(id: string): Candidate | undefined {
+    const candidate = this.host.engine.candidate(id)
+    if (!candidate) return
+    return { ...candidate, tickets: candidate.tickets.filter(ticket => this.host.visibleTicket?.(candidate.triggers[0]!, ticket) !== false) }
+  }
   /** Whether `evalId` is still the active evaluation for `trigger`. */
   private live(evalId: string, trigger: Trigger): boolean { return this.host.engine.candidate(trigger.id)?.evalId === evalId }
   /** Drop an Eval's context and reads once it finishes; any running load for it discards its result. */
   release(evalId: string): void { this.evals.delete(evalId) }
   /** Resolve the active evaluation for a trigger; historical triggers have none, and explicit requests are routed instead. */
   private evalFor(triggerId: string): { candidate: Candidate; trigger: Trigger } {
-    const candidate = this.host.engine.candidate(triggerId)
+    const candidate = this.candidate(triggerId)
     if (!candidate) throw new Error('No assessment is in progress for this trigger; it was already decided, timed out, or never reached assessment')
     if (candidate.strength === 'explicit') throw new Error(EXPLICIT)
     const trigger = candidate.triggers.find(item => item.id === triggerId)!

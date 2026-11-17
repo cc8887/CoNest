@@ -6,6 +6,7 @@ import type { PromptVersion } from './app/prompts.ts'
 import type { SettingsVersion } from './app/store.ts'
 import type { SettingsSave } from './policy.ts'
 import type { Retry } from './sources/github.ts'
+import type { BindingRecord, PortalAccess, PortalInvite } from './app/portal.ts'
 
 /** Key of a KV record whose value has type `V`; a plain string represents an untyped key. */
 export type Key<V> = string & { readonly __value?: V }
@@ -31,6 +32,13 @@ export const KV = {
     builtIn: family<string, [base: string]>('prompt-built-in:') },
   /** Runtime: the main Session's ID. */
   runtime: { masterId: record<string>('master-id') },
+  /** Members: immutable bot-owner pins, private router ids and per-Trigger ownership, committed in the original Store. */
+  members: { binding: family<{ ownerId: string; memberId: string }, [account: string]>('member-binding:'),
+    session: family<string, [member: string]>('member-router:'), trigger: family<string, [trigger: string]>('member-trigger:') },
+  /** Portal: private QR jobs and hashed personal access credentials; never exposed to model tools. */
+  portal: { binding: family<BindingRecord, [member: string]>('portal-binding:'),
+    invite: family<PortalInvite, [member: string]>('portal-invite:'), access: family<PortalAccess, [digest: string]>('portal-access:'),
+    epoch: family<number, [member: string]>('portal-epoch:') },
   /** Sessions: prompt revisions each Session has worked under, ordered oldest first; the last entry (`.at(-1)`) is its active revision. */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:') },
   /** Schema 11 migration: legacy main-Session queues imported into the effect table. */

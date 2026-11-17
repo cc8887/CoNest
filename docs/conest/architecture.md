@@ -1,90 +1,48 @@
 # CoNest 架构决定
 
-状态：已接入单 owner 微信 Source 和主 Runtime 的 GitHub 可选启动。`src/m0` 仍为独立连接探针；普通微信请求通过原有 Store、Engine、Ticket 和 outbox。家庭领域尚未接入运行时。部署和验证范围见[微信主 Runtime](weixin-runtime.md)与 [M0 文档](m0.md)。
+当前源码提供网页成员注册、微信扫码自动绑定、独立个人界面、私有路由 Session、宿主工单权限和共享队列。每位成员就是一个独立租户，具体词义见根目录 [CONTEXT.md](../../CONTEXT.md)。平台管理员负责创建和停用成员，不在租户内再划分家庭管理员。
 
-## 仓库怎么切
+## 模块边界
 
-一个 Git 仓库，三条边界：
-
-| 模块 | 位置 | 职责 | 本次状态 |
-| --- | --- | --- | --- |
-| DSH 内核 | 上游的 `src/core`、`src/app`、`src/executor` 与插件入口 | 唯一的工单、Attention、Report 状态机。持久化仍是 `<stateDir>/orchestrator.sqlite`，只有 Store 打开它 | 沿用上游状态机，宿主支持禁用 GitHub |
-| 家庭领域 | `src/family` | 成员、渠道身份绑定、会话范围、工单访问、记忆授权、Attention 投递目标，以及默认拒绝的纯函数 | 骨架。插件不导入它 |
-| 渠道 Source | `src/sources` 的 `SourceKind` | 把外部事件译成 Trigger，并把回复写回渠道 | GitHub、飞书与新增的单 owner 微信 Source |
-
-不另起一套工单库、调度器或记忆系统。以后如果要做独立网关，只能做传输，不能再写一份任务或记忆的事实来源。Octop 一类网关的想法留到那时再评估，本次不引入其代码。
-
-家庭模块仍放在现有单包里。`pnpm-workspace.yaml` 仅为根包声明依赖构建策略，没有拆分子包。M0 新增 `src/m0/cli.ts` 构建入口，另外新增微信 Source 和一次性初始化入口，保留主插件、原 Source 与面板入口；M0 代码不会导入主插件。`src/family` 仍不在这些运行入口的导入图里。新增源码和测试已列入 `docs/007-architecture.md` 的清单。
-
-上游领域模型明确拒绝把“人”或跨 Source 的身份映射做成内核实体：映射只作为提示词存在（`docs/001-domain.md` 的 Rejected concepts）。CoNest 的 `Member` 与 `IdentityBinding` 放在内核外面，就是为了不在本次初始化里改写这条规则，也不假装内核已经接受了它。
-
-## 家庭对象
-
-类型在 `src/family/domain.ts`。它们引用 DSH 的 Ticket id 或 Attention id，但不保存工单正文、报告或对话记录。
-
-| 类型 | 含义 |
+| 模块 | 职责 |
 | --- | --- |
-| `Member` | 稳定的家庭成员。`disabled` 不能通过授权 |
-| `IdentityBinding` | 某个 Source 上的外部账号 id 属于哪个成员。`source` 使用 `SourceKind.kind` 的字符串，不另起一套渠道名 |
-| `ConversationScope` | `dm` 只指向一个成员。`group` 只有房间 id，没有成员名单 |
-| `TaskAccess` | 某个已存在工单的所有者、参与者和 `private` / `household` 可见性。不是第二个工单 |
-| `MemoryGrant` | 记忆默认只有所有者可读。`member` 授权给一位成员，`household` 必须是一条显式记录，同住一个屋檐下不会自动获得 |
-| `AttentionTarget` | 提议中的投递目标：哪个成员、哪一条工单、哪一个 Attention id、哪段会话 |
+| `src/core` / `src/app/store.ts` | 唯一的 Engine、Ticket、Assignment、Report、Attention、effects、outbox 和 SQLite Store |
+| `src/app/members.ts` | 持久化成员与 bot/owner 归属、消息归属和私有 router id；在上下文读取、工具、执行和回传处检查范围 |
+| `src/app/portal.ts` | 创建成员、一次性个人入口、网页登录、扫码生命周期、私有凭证保存与允许名单原子提交 |
+| `src/app/portal-http.ts` / `src/portal` | 经 DSH 认证的平台注册界面，以及独立 Origin 的个人页面和受限接口 |
+| `src/sources` | GitHub、飞书、微信与 personal 网页 Source，将外部请求转为原 Trigger，并复用 outbox |
+| `src/family` | 尚未接入 Runtime 的共享领域设计：共享工单、记忆、参与者与群授权 |
 
-`authorize`（`src/family/authorize.ts`）对空目录和任何无法唯一解析的行动者一律拒绝。群会话在行动者解析成功后仍拒绝，原因是 `group_membership_unmodeled`。私聊只允许该成员；用渠道账号调用时，账号的 Source 还必须与会话的 Source 相同。
+不另建任务库、状态机或成员专属 worker 队列。成员和账号引用保存在 Source 设置；身份 pins、路由、扫码状态与网页凭据摘要保存在原 Store KV。工单归属从原始 Trigger 派生。内核仍不认识 Member，宿主在调用与投递边界执行授权。
 
-这组判断没有提示词参与。把它接进宿主之前，成员隔离并不存在。
+新增源码和测试列在 [007 Architecture](../007-architecture.md)。单包保留 `dsh-superagent` 包名和插件 id，沿用 DSH 的插件、Source 和 Session 接口。`src/m0` 仍是独立探针，不创建工单。
 
-## 内核扩展点
+## 注册与页面权限
 
-下面三项标明各自落地状态。代码阅读结论写在每一项里，避免把上游已有机制说成家庭功能，也避免把没有的机制说成已经有了。
+平台管理员登录 DSH，通过 Superagent 的来源页进入成员注册界面。创建成员后异步生成微信二维码，并生成只交给对应成员的一次性个人链接。扫码确认后，宿主检查账号唯一归属、私有保存凭证，再将账号绑定、允许名单和绑定成功状态一并提交；无需手改 Source/Policy。失败时保留原绑定。PIN 只在内存和当前 provider 请求中使用，不写入数据库或日志。
 
-### 1. 家庭授权执行 — 提议
+个人链接一天内有效，兑换后失效；登录令牌只存摘要，浏览器使用 HttpOnly、SameSite=Strict Cookie。个人接口从 Cookie 解析成员，列表、报告、追问、停止和重试都检查所属工单。停用成员增加凭据版本，全部旧链接和登录立即失效，重新启用不会恢复旧凭据。平台界面可生成新链接，已有其他有效登录不因此失效。
 
-已经存在的是按 Source 身份工作的策略门闩。`docs/002-authorization.md` 写明宿主执行允许名单、规则和 Mandate，消息和引用的文档不能改变这些权限。实现位于 `src/policy.ts` 的门闩与 Mandate 再验证，并由 Engine 在接受工作和恢复工单时使用。
+个人服务默认监听 `127.0.0.1:3089`；DSH 管理端为 `127.0.0.1:3088`。平台注册接口要求 DSH Connection 的签名会话，租户凭据不能访问。独立 Origin 避免把 DSH Session、插件管理、文件等宿主能力暴露给个人页面。远程个人监听要求 TLS；HTTPS 代理只转发个人端口并保留 Host。决定见 [ADR 0001](../adr/0001-personal-portal-origin.md)。
 
-没有存在的是成员级授权。内核没有 `Member`。跨 Source 的身份对应被 `docs/001-domain.md` 拒绝，并写成提示词。`src/index.ts` 与 `src/app/runtime.ts` 不导入 `src/family`。
+## 私有路由与执行
 
-提议的接法是在宿主里、在 Eval 接受、订阅扇出和将来的记忆读取之前调用默认拒绝的检查，并把拒绝做成宿主错误，而不是写进提示词。在那之前，`authorize` 的测试不能被引用为运行时安全。
+每个成员有稳定私有 router，每个工单有独立 worker Session 与目录；全部共享 Engine 的执行槽位。每条成员请求独立建线程，由私有 router 决定建单或附加到本人的原工单。候选相关工单、分页列表、单资源读取、工具参数及异步返回均由宿主过滤。报告和 Attention 回到原成员 router，结果经原 outbox 返回对应渠道。
 
-### 2. 定向 Attention 路由 — 提议
+网页 `personal` Source 和微信绑定指向相同成员。网页可在未绑定微信时使用；停用微信 Source 不会隐藏本人已拥有的网页任务。来源策略仍是准入条件，可信成员身份不能由模型或浏览器任意指定。
 
-已经存在的 Attention 是 `src/core/model.ts` 的 `{ id, question, triggerId? }`。`src/core/replies.ts` 把问题回复送到引发该问题的消息所在渠道；没有这条消息时，送到工单开始的渠道。`src/app/notices.ts` 的 `reportRelay` 把 `worker_attention` 交给主 Session。工单记录在 SQLite 里，重启后上游工单还在。
+成员模式只开放带宿主检查的工单工具，拒绝继承的 shell、文件、子 Agent、全局设置工具；所有受该 Runtime 管理的 Session 都遵循该限制。`prepare` 等配置由平台操作者负责。底层仍使用上游 `danger-full-access` 权限预设，目录命名和命令包装不是 OS 沙箱。任意代码执行须后续单独设计隔离。
 
-没有存在的是“发给指定成员”。Attention 上没有成员 id，回复也不查 `AttentionTarget`。家庭模块里的目标不会写入 `orchestrator.sqlite`。
+## 微信与恢复
 
-提议的接法仍使用 Engine 里的那条 Attention：宿主在发送前读取目标成员的绑定，把问题送到该成员被授权的私聊，并把工单 id 与 Attention id 一起记下来，使重启后的发送仍指向同一次提问。不另建问题队列。
+微信 Source 默认加载；空成员目录时暂停轮询，网页绑定后动态激活对应账号。每个账号仅接受其已确认 owner 的完整文本私聊，拒绝陌生人和群。bot/owner/member 归属不可换人复用，旧单 owner 共享历史需新状态和 DSH profile 才能切入成员模式。停用保留历史归属。
 
-### 3. 非 GitHub 启动与非 PR 完成 — 部分落地
+Trigger、回复上下文和游标在原 Store 同一事务提交。账号 id 进入幂等键、线程、游标、context 与回执；token/context 不进入模型提示词。发送分段有稳定客户端 id 与本地记录，不确定发送阻止盲目重发，需核实手机，不承诺服务端 exactly-once。本地凭证租约只覆盖同主机同路径，迁移前停止其他轮询进程。未完成扫码状态可重启恢复，二维码超时可重新生成。
 
-已经存在的 `prepare` 是一条 shell 命令。`src/policy.ts` 的 `executor.prepare` 由 `src/executor/dsh.ts` 的 `prepareDirectory` 在工单目录还不存在时执行一次。上游文档说典型命令是 `git worktree`。命令本身可以不是 git，失败会让工单失败。
+明确禁用 GitHub 后不探测账号或仓库、不借用 ambient 凭证；普通文本任务沿现有 `ready → completed` 协议完成。保留原 GitHub/飞书使用方式和命令行初始化兼容。
 
-结束条件仍然带着 pull request 的形状。`TicketOutcome` 含有 `merged` 与 `closed`，`Follow` 记录 `merged | closed`（`src/core/model.ts`）。GitHub 的跟随规则在 `src/sources/github-pull.ts`。执行器恢复文案要求查看 worktree、git 历史和 PR 状态（`src/executor/dsh.ts`）。没有 pull request 时，上游允许一条 `ready` 报告把工单结束为 `completed`；这不等于家庭任务已经有了独立的完成协议。
+## 验收与后续
 
-已落地：明确设置 `sources.github.enabled: false` 后不解析 GitHub 账号或仓库，不写 GitHub 凭证助手；GitHub CLI 调用会明确拒绝，主 Runtime 可以启动。非 PR 文本任务沿现有 `ready` → `completed` 路径完成，未改 Engine，也没有新增工单写入者。代码专用的恢复提示和通用工具隔离仍需后续改进。
+真实开发机 DSH/hy4 单账号工单闭环和手机收件已由用户确认。当前本地 mock 验收通过网页创建 10 个租户、模拟扫码自动授权，再以真实 DSH 跑 100 张工单、单 worker 排队中途重启、定向追问、原账号结果回传；每次模型请求和个人页面结果均检查成员范围。浏览器还验证创建成员、绑定状态、网页提交与结果、手机布局。
 
-## 私聊、群和提示词
-
-私聊范围只命名一个成员。授权函数允许该成员在匹配的 Source 上发言，拒绝其他人。
-
-群范围不包含名单。函数对群直接拒绝，避免出现一个总是成功的假适配器或假界面。上游飞书 Source 可以按配置接收群里的 @ 或全部消息，那是原型自己的准入表，不是 CoNest 的家庭群隔离，也不是微信群。
-
-隔离必须由宿主执行。只在提示词里写“不要把甲的内容告诉乙”不算隔离。上游对策略门闩已经是这个态度；家庭数据还没有对应的宿主检查。
-
-## 微信 Source
-
-`src/sources/weixin.ts` 实现真实 `SourceKind`，通过 `./weixin-watch` 导出并在 bundle 中默认关闭。它与 M0 共用 `src/sources/weixin-api.ts` 的 iLink 传输。仅接受凭证文件中绑定 owner 的完整文本私聊；账号、owner 和私聊地址由宿主匹配，群与陌生人被拒绝。
-
-`src/ingress/messages.ts` 已替换原抛错桩，完成消息到 Trigger、原私聊回复和网关契约映射。微信 Source 在原 Store 的同一事务内保存 Trigger、回复上下文和游标；重放不重复建单，也不会把旧 context 覆盖到新消息上。凭证和 `context_token` 不进入 Trigger 或提示词。
-
-结果和追问使用现有 outbox，发送只能回到原绑定私聊。分段有稳定客户端 id 与本地发送记录；不确定发送会阻止自动重发，需操作者核实手机。该实现不承诺服务端去重或严格 exactly-once。同一凭证文件用本地租约防止重复轮询，其他主机仍必须由操作者停止。
-
-设置中的凭证路径与绑定身份只能由管理面板修改。已绑定的账号或 owner 不能在原状态目录中换绑，因为主 Session 保存私聊历史；改绑必须使用新状态目录。当前每个 Runtime 只配置一个绑定身份，多成员共享主 Session 的隔离尚未实现。
-
-协议参考锁定腾讯官方实现提交，版权声明见 `THIRD_PARTY_NOTICES.md`。真实双账号与 N100 现场验证仍待完成。家庭绑定与成员权限并未因 Source 接入而自动生效。
-
-## 运行方向
-
-目标机器是 Intel N100，已确认 Windows 11 专业版、15.8 GB 内存、WSL 2.7.14.0 和 Ubuntu WSL2/x86_64，开发方案以该发行版内运行 Linux 版本为目标。面向约 10 人的小家庭或小团队，最多约 100 个未完成任务，允许排队；单 owner 初始化配置为 1 个 worker。真机容量待测，当前 Node 18 / pnpm 10 先升级私有工具链。云端 hy4 配置见部署文档，版本号以 [provenance.md](provenance.md) 为准。
-
-`SETUP.md` 是上游给操作者的安装对话。它会创建账号并要求在操作者自己的终端里登录。那一步不属于这次初始化。
+新流程的 provider 和模型输入为 mock；多个真实微信账号、N100 性能、Windows/WSL 生命周期尚待现场验证。共享记忆、跨成员工单共享、群授权、OS 沙箱和完整资源预算均为后续能力；`src/family/authorize.ts` 的纯函数测试不能作为这些能力已实现的证据。目标仍为 N100 / WSL2、约 10 人、100 个未完成任务允许排队，先用 1 个 worker。部署步骤见 [微信主 Runtime](weixin-runtime.md)。

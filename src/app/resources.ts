@@ -19,6 +19,7 @@ import type { Settings } from './settings.ts'
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
 import type { TextCache } from './cache.ts'
+import type { Members } from './members.ts'
 
 /** Resource descriptors exposed via orchestrator_read, marking which resources worker sessions may also read for their own ticket. */
 export const RESOURCES: readonly { name: string; holds: string; executor?: true }[] = [
@@ -63,6 +64,7 @@ export interface ResourceHost {
   readonly commands: Commands
   readonly masterId: string
   readonly context: Context
+  readonly members?: Members
   promptVersion(sessionId: string): PromptVersion
   /** Whether a Session may read `revision` (the revision it currently runs under or any revision it ran under previously). */
   mayRead(sessionId: string, revision: number): boolean
@@ -117,17 +119,19 @@ async function transcript(host: ResourceHost, ticketId: string) {
 
 const ROUTES: readonly Route[] = [
   ['tickets', read => {
-    const host = main(read), tickets = host.store.tickets.list()
+    const host = main(read), tickets = host.store.tickets.list().filter(ticket => !host.members?.isolated() || host.members.canTicket(read.sessionId, ticket.id))
     const card = (ticket: Ticket) => ({ ...ticketCard(ticket), ...host.sessions.modelRetry(runningAssignment(ticket) && workerSessionId(ticket.id)) })
     return list(read, (offset, count) => tickets.slice(offset, offset + count).map(card))
   }],
   ['triggers', read => {
-    const { store } = main(read)
-    return list(read, (offset, count) => store.read.recentTriggers(offset, count).map(item => triggerCard(item, store.triggers.disposition(item.id))))
+    const { store, members } = main(read)
+    return list(read, (offset, count) => (members?.isolated() ? members.triggers(read.sessionId, offset, count) : store.read.recentTriggers(offset, count))
+      .map(item => triggerCard(item, store.triggers.disposition(item.id))))
   }],
   ['threads', read => {
-    const { store } = main(read)
-    const threads = store.read.subscribedThreads().sort((a, b) => (b.lastAt ?? b.createdAt).localeCompare(a.lastAt ?? a.createdAt))
+    const { store, members } = main(read)
+    const threads = store.read.subscribedThreads().filter(thread => !members?.isolated() || members.canThread(read.sessionId, thread.key))
+      .sort((a, b) => (b.lastAt ?? b.createdAt).localeCompare(a.lastAt ?? a.createdAt))
     return list(read, (offset, count) => threads.slice(offset, offset + count).map(thread => threadCard(thread, threadTitle(store, thread))))
   }],
   ['thread/', read => {
@@ -147,7 +151,10 @@ const ROUTES: readonly Route[] = [
     const decisions = store.decisions.byThread(thread.key).slice(-THREAD_DECISIONS).reverse().map(decisionCard)
     return { ...card, tickets, decisions, ...page }
   }],
-  ['decisions', read => list(read, (offset, count) => main(read).store.read.recentDecisions(offset, count).map(decisionCard))],
+  ['decisions', read => list(read, (offset, count) => {
+    const host = main(read)
+    return (host.members?.isolated() ? host.members.decisions(read.sessionId, offset, count) : host.store.read.recentDecisions(offset, count)).map(decisionCard)
+  })],
   ['decision/', read => {
     const decision = main(read).store.decisions.get(read.rest)
     if (!decision) throw new Error('Unknown decision')
@@ -302,6 +309,7 @@ export async function readResource(host: ResourceHost, resource: string, offset:
   const route = ROUTES.find(([route]) => route.endsWith('/') ? name.startsWith(route) : name === route)
   if (!route) throw new Error('Unknown context resource')
   const sessionId = ticketId ? workerSessionId(ticketId) : host.masterId
+  host.members?.checkRead(sessionId, name)
   const rest = route[0].endsWith('/') ? name.slice(route[0].length) : ''
   return route[1]({ host, resource: name, rest, offset, sessionId, ...limit ? { limit } : {}, ...ticketId ? { ticketId } : {},
     ...signal ? { signal } : {} })

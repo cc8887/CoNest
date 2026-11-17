@@ -74,6 +74,8 @@ export interface ExecutorHost {
   closing(): boolean
   /** Whether processing is paused, which holds launches and input deliveries. */
   paused(): boolean
+  allowed?(ticket: Ticket): boolean
+  strictCapacity?(): boolean
   /** Execution environment variables for `ticket`, passed to its workspace prepare command. */
   environment(ticket: Ticket): Variable[]
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
@@ -271,6 +273,7 @@ export class DshExecutor implements Executor {
     const ticket = this.host.store.tickets.get(ticketId)
     const assignment = ticket && latestAssignment(ticket)
     if (!ticket || !liveTicket(ticket) || assignment?.id !== assignmentId || assignment.state !== 'pending') return
+    if (this.host.allowed?.(ticket) === false) throw new Later()
     this.slots.reserve(ticketId, 'launch')
     try { await this.launch(ticket, assignment); this.transient.delete(`launch:${assignmentId}`) }
     catch (error) {
@@ -300,12 +303,13 @@ export class DshExecutor implements Executor {
         const assignment = ticket && liveTicket(ticket) ? runningAssignment(ticket) : undefined
         const inputId = ticket?.undelivered[0]
         if (!ticket || !assignment || inputId === undefined) return
+        if (this.host.allowed?.(ticket) === false) throw new Later()
         // Waking an idle worker reserves a slot (including the extra slot reserved for human follow-ups).
         const sessionId = workerSessionId(ticketId)
         if (!woken && !this.running(ticket)) {
           // A person's message wakes its worker ahead of new launches, in the slot kept for it.
           const person = ticket.undelivered.some(id => fromPerson(ticket.inputs.find(item => item.id === id)))
-          this.slots.reserve(ticketId, person ? 'person' : 'wake')
+          this.slots.reserve(ticketId, person && !this.host.strictCapacity?.() ? 'person' : 'wake')
           woken = true
         }
         const input = ticket.inputs.find(item => item.id === inputId)

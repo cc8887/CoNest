@@ -27,8 +27,11 @@ import { settingsView } from './views/settings.ts'
 import { sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
+import { PORTAL_ADMIN_PATH, registrationHttp } from './portal-http.ts'
+import type { Portal } from './portal.ts'
 
 export interface HttpHost {
+  readonly registration?: { portal: Portal; origin(): string | undefined }
   readonly store: Store
   /** Feishu message links resolved since startup, used by search to match AppLink URLs. */
   readonly sourceLinks: Pick<TextCache, 'entries'>
@@ -233,7 +236,17 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
   const disposers = [
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
+      const connection = ctx.get('connection') as { requestRejection(request: { headers: IncomingMessage['headers'] }): number | undefined } | undefined
+      if (url.pathname === PORTAL_ADMIN_PATH || url.pathname.startsWith(PORTAL_ADMIN_PATH + '/')) {
+        if (![ `127.0.0.1:${ctx.webServer.port}`, `localhost:${ctx.webServer.port}` ].includes(req.headers.host ?? '')) { json(res, 403, { error: 'Loopback management host required' }); return }
+        if (!runtime.registration) { json(res, 503, { error: '成员注册尚未就绪' }); return }
+        await registrationHttp(req, res, runtime.registration.portal, runtime.registration.origin(),
+          () => connection ? connection.requestRejection(req) : 503, req.headers.host ?? '')
+        return
+      }
       if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }
+      const rejected = connection?.requestRejection(req)
+      if (rejected) { json(res, rejected, { error: 'Operator authentication required' }); return }
       if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
       try {
         await runtime.ready

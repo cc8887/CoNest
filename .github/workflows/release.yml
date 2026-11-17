@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/release-*']
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -66,7 +66,8 @@ jobs:
           sed "s/image: conest:.*/image: conest:$version/" compose.yml > release-assets/compose.yml
           cp containers/model-test.env.example release-assets/model-test.env.example
           cp docs/conest/docker.md release-assets/DOCKER.md
-          cp docs/conest/releases/m0.md release-notes.md
+          cp "docs/conest/releases/$version.md" release-notes.md
+          cp .artifacts/container-mock-report.json release-assets/VALIDATION.json
           cd release-assets
           sha256sum ./* > SHA256SUMS
       - name: Publish verified assets
@@ -76,6 +77,14 @@ jobs:
         shell: bash
         run: |
           gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease \
-            --title "CoNest $RELEASE_TAG — 微信工单与 N100 Docker 验证版" --notes-file release-notes.md
+            --title "CoNest $RELEASE_TAG — 多租户网页与微信 Docker 验证版" --notes-file release-notes.md
           gh release upload "$RELEASE_TAG" release-assets/*
           gh release edit "$RELEASE_TAG" --draft=false
+      - name: Retain synthetic failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-mock-diagnostics
+          path: .artifacts/container-mock-*
+          if-no-files-found: ignore
+          retention-days: 7

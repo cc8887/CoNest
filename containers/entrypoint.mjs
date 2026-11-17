@@ -66,7 +66,7 @@ function modelEnv() {
 
 try {
   if (command === 'help' || command === '--help') {
-    console.log('CoNest container\n  m0 doctor|model|login|status\n  init [--account <bot-id>]\n  start [DSH options]\n  profile  Initialize configuration only\nState: /data. Publish 3087 and 3088 on host 127.0.0.1 only.')
+    console.log('CoNest container\n  m0 doctor|model|login|status\n  init [--account <bot-id>]\n  init-members [/data/members.json]\n  start [DSH options]\n  profile  Initialize configuration only\nState: /data. start opens web member enrollment automatically. DSH admin: loopback 3088; personal portal: loopback 3089. Remote personal access requires TLS; see the deployment guide.')
   } else if (command === 'm0') {
     const operation = args[0] || 'help'
     const env = ['model', 'weixin'].includes(operation) ? modelEnv() : undefined
@@ -76,6 +76,11 @@ try {
     } finally { env?.dispose() }
   } else if (command === 'profile') {
     ensureProfile(); console.log('Private container profile initialized; no account was bound and no polling started.')
+  } else if (command === 'init-members') {
+    ensureProfile()
+    if (args.length > 1) throw new Error('Usage: init-members [/data/members.json]')
+    await child(process.execPath, [join(app, 'lib/weixin-setup.js'), '--state-dir', join(data, 'runtime'),
+      '--members-file', resolve(args[0] || join(data, 'members.json'))])
   } else if (command === 'init') {
     ensureProfile()
     const credentials = join(data, 'weixin-account.json')
@@ -83,8 +88,9 @@ try {
       '--state-dir', join(data, 'm0'), '--output', credentials])
     await child(process.execPath, [join(app, 'lib/weixin-setup.js'), '--state-dir', join(data, 'runtime'), '--credentials-file', credentials])
   } else if (command === 'start') {
-    if (!existsSync(join(data, 'runtime/orchestrator.sqlite'))) throw new Error('Bind with m0 login, then run init before starting the Runtime')
     ensureProfile()
+    if (!existsSync(join(data, 'runtime/orchestrator.sqlite')))
+      await child(process.execPath, [join(app, 'lib/weixin-setup.js'), '--state-dir', join(data, 'runtime'), '--web'])
     const env = modelEnv()
     const network = process.env.CONEST_CONTAINER === '1'
       ? ['--host', '127.0.0.1', '--port', '3088', '--public-url', 'http://127.0.0.1:3088',

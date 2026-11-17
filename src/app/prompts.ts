@@ -139,8 +139,8 @@ export class Prompts {
     this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
-  compose(config: PromptConfig, role: Role, variables = this.environment()): string {
-    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined)
+  compose(config: PromptConfig, role: Role, variables = this.environment(), settings = this.store.settings()): string {
+    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(settings, config) : undefined)
   }
   /** Returns skills to register in every Session: built-in Source skills (`feishu` only when a Feishu bot is configured) followed by team skills. */
   skills(config: PromptConfig): [string, string][] {

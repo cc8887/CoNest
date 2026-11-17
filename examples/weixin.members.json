@@ -1,0 +1,12 @@
+{
+  "members": [
+    { "id": "alice", "displayName": "Alice", "status": "active" },
+    { "id": "bob", "displayName": "Bob", "status": "active" },
+    { "id": "carol", "displayName": "Carol", "status": "active" }
+  ],
+  "accounts": [
+    { "memberId": "alice", "accountId": "<alice bot id>", "ownerId": "<alice bound owner>", "credentialsFile": "/data/accounts/alice.json" },
+    { "memberId": "bob", "accountId": "<bob bot id>", "ownerId": "<bob bound owner>", "credentialsFile": "/data/accounts/bob.json" },
+    { "memberId": "carol", "accountId": "<carol bot id>", "ownerId": "<carol bound owner>", "credentialsFile": "/data/accounts/carol.json" }
+  ]
+}

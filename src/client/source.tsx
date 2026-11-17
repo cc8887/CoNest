@@ -146,6 +146,7 @@ export function SourceStatus() {
   const elsewhere = setup?.problem?.place === 'deployment' ? setup.problem : undefined
   return <div className="dt-form">
     <StatusHead hint={t('sourceStatusIntro')} settings="source" />
+    <p><a className="dt-textlink" href="/orchestrator/registration/" target="_blank" rel="noopener noreferrer">成员注册与微信绑定 · 独立个人空间 ↗</a></p>
     {elsewhere && <p className="dt-error">
       <SetupMessage problem={elsewhere} lead /> <button type="button" className="dt-textlink"
         onClick={() => navigate(setupPage(elsewhere.place))}>{t('setupFixLink')}</button>

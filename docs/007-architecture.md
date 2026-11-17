@@ -234,6 +234,8 @@ Validation inherits an omitted base from the saved override, drops removed parts
 
 `Sessions` (`src/app/sessions.ts`) manages DeepSeek Harness Sessions for both roles. `ensure` creates a Session with its role's model. `install` follows agent events and registers prompts, skills and tools for managed Sessions.
 
+`Members` (`src/app/members.ts`) extends this application layer without another task store: Source settings hold the member directory, KV pins bot/owner/member identities and stable router ids, and each ingested Weixin Trigger gets an immutable member grant in its intake transaction. Member routers and all worker tools check resource ownership; candidate lists, resource pagination, policy prompts, reports and notices use the same ownership. Member mode permits only checked task tools in all managed Sessions and uses the strict shared worker limit even for human followups. Legacy single-owner state cannot be switched to member mode after private history exists.
+
 `prompt` delivers once per request id. `relay` and `notify` enqueue main-Session messages handled by the `relay` and `notice` effects. `src/app/notices.ts` defines their content; `delivery` checks whether a message arrived.
 
 Each model request binds the Session to the current prompt revision. The revisions it used are stored durably: `promptVersion` identifies the active one and `mayRead` restricts which versions a worker can inspect. Registrations are tracked in one map per agent.
@@ -330,6 +332,12 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/context.ts` | The built-in prompt text, read from `prompts/`, and the transcript entries Sessions read |
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
+| `src/app/members.ts` | Durable identity pins, private router addresses, member grants, scoped reads and model-tool authorization |
+| `src/app/portal.ts` | Browser enrollment, private credential persistence, one-time access links, tenant sessions and scoped task operations |
+| `src/app/portal-types.ts` | Credential-free registration and personal-page contracts |
+| `src/app/portal-http.ts` | DSH-authenticated registration and a separate-origin personal HTTP server |
+| `src/portal/index.tsx` | Standalone administrator enrollment and authenticated personal-space UI |
+| `src/portal/portal.css` | Responsive personal and operator page styling |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |
 | `src/app/retry-health.ts` | `RetryHealth`: which Sessions wait on a model budget retry, for the `models` health entry |
 | `src/app/role-models.ts` | Resolves the Eval and Executor models, and seeds a new Session with its role's model |
@@ -402,7 +410,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/ingress/messages.ts` | Channel-instance message normalization, unique identity lookup, exact private reply routing and gateway-shaped mappings; group output remains denied |
 | `src/sources/weixin-api.ts` | Shared real iLink QR/PIN, poll and text-send transport for M0 and the registered Weixin Source |
 | `src/sources/weixin-account.ts` | Private host credential-file validation and exact account/owner matching |
-| `src/sources/weixin.ts` | Single-owner Weixin Source: atomic Engine intake/cursor, original-DM outbox delivery and durable uncertain-send guards |
+| `src/sources/weixin.ts` | Pinned Weixin accounts: independent polling, member message routing, atomic intake/cursor, original-account outbox and uncertain-send guards |
+| `src/sources/weixin-config.ts` | Validated member directory and account bindings shared by the Source, host and initializer |
+| `src/sources/personal.ts` | Authenticated personal-web task input and browser mailbox through the original Engine/outbox |
 | `src/app/weixin-setup.ts` | Initializes a fresh single-owner Store with GitHub/Feishu disabled, explicit Weixin admission and one worker; refuses existing databases |
 | `src/weixin-setup.ts` | Executable wrapper for the fresh Weixin Runtime setup command |
 | `src/m0/cli.ts` | Opt-in M0 commands for real model, QR login, private-message transport, local status and machine diagnostics; separate from the SuperAgent plugin |
@@ -464,6 +474,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/m0.spec.ts` | M0 HTTP, owner/account isolation, durable deduplication and delivery recovery through public transport/journal interfaces; no live accounts or model keys |
 | `tests/m0-dsh.spec.ts` | Actual DSH loop and pi-ai adapter against a local SSE server: fragmented tool call, result round trip, Session isolation, cancellation and provider errors; no external calls |
 | `tests/weixin-runtime.spec.ts` | Main Runtime startup without GitHub, real Ticket/Attention/result flow through Weixin and the existing outbox, deduplication and stranger/group refusal |
+| `tests/multiuser-readiness.spec.ts` | Legacy single-owner compatibility and 100 Tickets from simulated Feishu requesters through the shared scheduler; not member isolation acceptance |
+| `tests/weixin-members.spec.ts` | Ten pinned Weixin members: private routers and reads, foreign-id refusal, Attention/followup/result routing, disabled members and 100 Tickets through one durable queue |
+| `tests/portal.spec.ts` | Web creation, QR/PIN enrollment, automatic allowlists, one-time login, tenant/auth boundaries and scoped web tasks |
 | `tests/container.spec.ts` | Private container profile setup, retained operator edits, state-path and model-endpoint guards |
 | `tests/m0-login.spec.ts` | Real QR listener capability and Host checks on loopback and explicit container listeners |
 

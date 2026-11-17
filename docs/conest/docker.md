@@ -1,58 +1,72 @@
 # CoNest Docker 验证版
 
-面向 N100 的 `linux/amd64`，当前仅允许一位绑定 owner 的文本私聊。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主不必升级 Node 或 pnpm。镜像没有模型密钥、微信凭证或私聊数据。不要并行轮询同一 bot。
+`v0.2.0-alpha.1` 面向 N100 的 `linux/amd64`，提供每位成员独立租户的网页注册、微信扫码绑定、个人任务页面与共享工单队列。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主无需安装 Node 或 pnpm。它是预发布版，N100 真机与多个真实微信账号仍待现场验收。旧 `v0.1.0-m0.1` 只支持一位 owner。
 
-上游管理服务强制回环监听，本版使用 Linux 的 `network_mode: host`，保持扫码和管理服务都监听 `127.0.0.1`。它共享容器引擎宿主的网络，不使用桥接端口映射。Docker Desktop 需 4.34 或更新版本并在设置中启用 host networking，见[官方说明](https://docs.docker.com/engine/network/drivers/host/)；WSL/Podman 虚拟机到 Windows 的访问仍需现场验证。
+## 下载与启动
 
-Release 提供镜像归档、源码包、`compose.yml`、模型环境模板及 `SHA256SUMS`。本仓库为私有仓库，下载需登录有权限的 GitHub 账号。下载同一个版本的全部附件到独立目录，先运行：
+本仓库为私有仓库，下载需要有权限的 GitHub 账号。从同一 Release 下载所有附件到独立目录：镜像归档、源码、Compose、模型模板、DOCKER.md、VALIDATION.json 和 SHA256SUMS。
 
 ```bash
 sha256sum --check SHA256SUMS
-docker load --input conest-0.1.0-m0.1-linux-amd64.docker.tar.gz
+docker load --input conest-0.2.0-alpha.1-linux-amd64.docker.tar.gz
 mkdir -p secrets
 cp model-test.env.example secrets/model-test.env
 chmod 700 secrets
 chmod 600 secrets/model-test.env
 ```
 
-在本机编辑 `secrets/model-test.env`，填写已有测试模型 API key。它不会进入镜像，但 Compose 会把它交给宿主容器进程；能管理 Docker 的管理员也能访问容器环境。密钥和 PIN 不要贴到聊天里。
+在本机编辑 `secrets/model-test.env`，填写已有 Tencent hy4 API key。模型供应商为 `https://copilot.tencent.com/v2/`，协议为 `openai-completions`，模型为 `hy4`。镜像不带真实凭证，PIN 和 key 不要贴到聊天中。Docker 管理员能访问容器环境，部署主机须可信。
 
-先验证镜像与模型：
+DSH 管理服务要求回环监听，Compose 沿用 Linux `network_mode: host`，共享容器引擎宿主网络，不做桥接端口映射。Docker Desktop 需启用 host networking（4.34+）；Windows/WSL/Podman 到宿主的网络路径仍需现场验证。
 
 ```bash
 docker compose run --rm conest m0 doctor
-docker compose run --rm conest m0 model
-```
-
-接着在终端启动绑定，打开其输出的 `http://127.0.0.1:3087/<随机路径>/` 网页扫码。需要 PIN 时只在该网页输入：
-
-```bash
-docker compose run --rm conest m0 login
-```
-
-绑定成功后初始化一个新 Runtime 并启动：
-
-```bash
-docker compose run --rm conest init
 docker compose up -d
 docker compose logs -f conest
 ```
 
-`init` 从同一数据卷中的 M0 绑定导出一个账号，创建原有 `orchestrator.sqlite`，默认禁用 GitHub/飞书并配置单 worker。已有数据库时拒绝覆盖，重启只需 `docker compose up -d`。多个 M0 绑定需用 `init --account <bot-id>` 明确选择。迁移已有账号可在卷中放置私有 `weixin-account.json`，需匹配 UID 1000 和 0600 权限；不要复制他人的状态或复用旧主 Session 换 owner。
+首次启动自动创建空成员目录和原有 `orchestrator.sqlite`，默认禁用 GitHub/飞书，使用单 worker。无需先 `m0 login`、`init` 或导出成员凭证。日志中的管理地址含访问凭据，只交给平台管理员。需要单独排查真实模型连接时，可运行 `docker compose run --rm conest m0 model`；这会调用云模型。
 
-服务日志会输出带访问凭据的 `http://127.0.0.1:3088/` 管理地址，按私有信息保管。DSH 与扫码页面都绑定 `127.0.0.1`，管理端口只信任 `127.0.0.1:3088` 和 `localhost:3088`。不要改成公网或局域网监听。扫码网页仍校验随机路径、Host 和 PIN POST 的同源条件。主 Runtime 面板继续执行回环监听、认证与同源检查。
+## 创建成员与微信绑定
 
-数据都在 `conest-data` 卷：`m0/` 绑定与连接日志、`weixin-account.json`、`runtime/` 工单与投递状态、`dsh/` profile 与 Session、`home/` 宿主缓存。镜像升级不应删除该卷。`docker compose down` 停止服务并保留数据；`down -v` 会删除数据，不作为普通停止或升级命令。
+1. 管理员打开日志中的 DSH 地址（默认 `http://127.0.0.1:3088/?token=...`），在 **Superagent → 来源 → 成员注册与微信绑定** 进入注册页。
+2. 填写成员名称，系统生成该成员的二维码和一次性个人访问链接。每位成员就是一个独立租户。
+3. 对应成员用本人微信扫码并确认；需要 PIN 时直接填网页。也可先将个人链接交给成员，让其在自己的“微信连接”页完成。
+4. 显示“微信已绑定”后，账号、允许名单和私有凭证已自动保存，无需改配置或重启。
+5. 只将个人访问链接交给对应成员。链接一天内有效且仅能兑换一次；登录持续 30 天。登录后收藏不含 `#invite` 的个人地址。换浏览器或退出后，由管理员生成新链接；停用成员会撤销所有旧登录。
 
-Compose 使用非 root UID 1000、只读根文件系统、临时 `/tmp`、不挂载宿主目录或 Docker socket，默认限制 2 个 CPU 和 2 GB 内存。它是初始部署配置，尚非 N100 容量实测或成员隔离验收。现有 worker/router 只开放工单工具；上游 DSH 权限预设仍为 `danger-full-access`，镜像中保留 M0 所需依赖及构建依赖，未宣称最小生产镜像。
+个人页面可提交任务、查看本人结果、回复追问、停止和重试；微信和网页共用同一成员身份与私有工单。账号仍只收扫码 owner 的文本私聊，不接陌生人或群。同一 bot/owner 不能改绑另一个成员。
 
-如果在 N100 使用已有 Podman，可先用 `podman load --input ...` 导入同一归档；Compose 的具体实现与网络需现场核实，本版 CI 使用 Docker 验证。不要为了导入镜像同时启动第二个服务实例。
+## 手机或其他设备访问
 
-本地构建及发布：
+默认个人服务为 `http://127.0.0.1:3089`，只能本机访问；默认链接不能直接在另一台手机打开。DSH 管理端继续仅在回环 `3088` 使用。
+
+对外部署个人页面时，可用可信 HTTPS 反向代理只转发个人端口 `3089`，保留外部 Host。在数据卷 `/data/dsh/profiles/conest/cordis.patch.yml` 的 `dsh-superagent` 配置中添加 `portalOrigin: https://conest.example.com`（替换为自己的真实域名，不带路径或结尾斜线），然后重启并重新生成链接。代理不能转发 DSH 管理端口。
+
+也可直接监听具体局域网 IP：设置 `portalHost`、`portalPort`、`portalTlsCertFile` 和 `portalTlsKeyFile`，TLS 文件使用容器内的私有数据卷或只读挂载路径。非回环监听必须启用 TLS；wildcard 监听被拒绝。证书需要被成员设备信任。该网络与证书配置仍需在 N100 现场完成。
+
+## 数据与升级
+
+数据保存在 `conest-data` 卷：`runtime/` 工单、网页凭据摘要、扫码状态、微信凭证和回执；`dsh/` profile 与 Session；`home/` 宿主缓存。默认个人目录不保存原始登录 token，扫码 PIN 不持久化。不要复制他人的状态来建立新租户。
+
+已有成员模式升级前先停止旧实例并备份卷；导入新镜像后使用同一成员卷启动。旧单 owner（包括 M0.1）不能继承原共享 Session 转成成员模式，应保留旧卷，创建新的卷/Compose project，再从网页重新创建和绑定。不要让两个实例同时轮询同一账号。
 
 ```bash
-docker build --platform linux/amd64 --build-arg VERSION=0.1.0-m0.1 -t conest:0.1.0-m0.1 .
-bash scripts/docker-smoke.sh conest:0.1.0-m0.1
+docker compose down
+docker compose up -d
 ```
 
-Docker 构建阶段执行完整 `pnpm check`；发布工作流随后核对架构、非 root 用户、M0 doctor、无真实渠道流量的主 Runtime 启动与容器重启。全部成功后，才上传并公布 GitHub 预发布附件。真实微信收件在开发机已验证，Docker/N100 上仍需按[主 Runtime 验收](https://github.com/cc8887/CoNest/blob/main/docs/conest/weixin-runtime.md)单独确认。
+`down` 保留数据；`down -v` 会删除卷，不是普通停止或升级命令。旧 `init`、`init-members` 和 M0 命令保留兼容，单 owner 路径见旧版 Release 的部署说明。
+
+Compose 使用非 root UID 1000、只读根文件系统、noexec 临时目录、2 个 CPU 和 2 GB 内存，无宿主目录或 Docker socket 挂载。成员模式只开放受宿主检查的工单工具；底层 DSH 权限预设仍为 `danger-full-access`，不构成 OS 沙箱。2 GB 是初始配置，不是 N100 的容量保证。
+
+## 本地构建与验收
+
+```bash
+docker build --platform linux/amd64 --build-arg VERSION=0.2.0-alpha.1 -t conest:0.2.0-alpha.1 .
+bash scripts/docker-smoke.sh conest:0.2.0-alpha.1
+```
+
+构建执行完整 `pnpm check`。smoke 检查镜像架构、非 root、原生加载器、空目录网页注册启动、DSH 签名登录、个人界面、未授权拒绝和重启；随后在不允许外部网络的镜像里，用真实 DSH 与 mock 模型/iLink 跑 10 租户、100 工单和 210 次回传，报告见附件 VALIDATION.json。这不代替真实微信、hy4 性能或 N100 容量验收。
+
+早先开发机原生 mock 有一次回执关联断言失败，后续 7 轮通过未确立根因。本版发布门槛包含上述 Linux 镜像验收，并增加失败诊断留存；此项继续跟进。

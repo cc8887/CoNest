@@ -1,6 +1,6 @@
 # 006 Deployment
 
-Use this guide to install, configure and operate dsh-superagent. It covers accounts, startup checks, upgrades and troubleshooting, building on [001 Domain model](001-domain.md) through [005 Panel](005-panel.md).
+For CoNest web enrollment and per-member personal tenants, use the guide at `docs/conest/weixin-runtime.md`. The remaining account instructions describe the upstream GitHub workflow. Use this guide to install, configure and operate dsh-superagent. It covers accounts, startup checks, upgrades and troubleshooting, building on [001 Domain model](001-domain.md) through [005 Panel](005-panel.md).
 
 ## What runs
 
@@ -93,9 +93,12 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |
+| `portalHost` / `portalPort` | no | CoNest personal tenant listener, default `127.0.0.1:3089`, separate from DSH management. A concrete IP is required; non-loopback listeners require TLS |
+| `portalOrigin` | no | Canonical public HTTPS origin for a proxy forwarding only the personal portal; no path or trailing slash. Preserve this Host through the proxy |
+| `portalTlsCertFile` / `portalTlsKeyFile` | no | TLS certificate and key for a direct personal listener; both required together. Restart after changing portal settings |
 | `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
 
-After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Changes apply without restart. `stateDir` cannot be changed there. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
+After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Volatile machine-limit changes apply without restart. `stateDir` and the personal portal listener fields require a plugin restart; they are not part of that limits editor. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
 
 ## Start and stop
 

@@ -43,7 +43,7 @@ COPY --from=dsh /opt/dsh /opt/dsh
 RUN mkdir -p /data/home && chown -R node:node /data
 USER node
 VOLUME ["/data"]
-EXPOSE 3087 3088
+EXPOSE 3087 3088 3089
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "/opt/conest/containers/entrypoint.mjs"]
 CMD ["start"]

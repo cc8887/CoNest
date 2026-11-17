@@ -6,6 +6,7 @@ import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, 
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { readWeixinAccount } from '../sources/weixin-account.ts'
+import { WeixinConfigSchema, weixinAccounts } from '../sources/weixin-config.ts'
 
 export interface SetupHost {
   readonly context: Context
@@ -20,7 +21,7 @@ export const setupChanged = (before: Settings, after: Settings): boolean => setu
 /** Account authority is panel-only; an enabled switch alone does not change the account. */
 export const accountSettingsChanged = (before: Settings, after: Settings): boolean =>
   Object.entries(SETUP_FIELDS).some(([id, keys]) => keys.some(key =>
-    (before.sources[id]?.config[key] ?? '') !== (after.sources[id]?.config[key] ?? '')))
+    JSON.stringify(before.sources[id]?.config[key] ?? '') !== JSON.stringify(after.sources[id]?.config[key] ?? '')))
 
 /**
  * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
@@ -67,8 +68,7 @@ export class Setup {
     const { machine } = this.host
     const source = block.slice(7)
     if (source === 'weixin' && settings.sources.weixin?.enabled) {
-      const config = settings.sources.weixin.config
-      try { readWeixinAccount(String(config.credentialsFile ?? ''), { accountId: String(config.accountId ?? ''), ownerId: String(config.ownerId ?? '') }) }
+      try { for (const binding of weixinAccounts(WeixinConfigSchema.parse(settings.sources.weixin.config), false)) readWeixinAccount(binding.credentialsFile, binding) }
       catch { throw new UserError('weixinCredentials') }
       return
     }

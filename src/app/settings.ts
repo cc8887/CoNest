@@ -13,6 +13,8 @@ import type { Sessions } from './sessions.ts'
 import { accountSettingsChanged, setupChanged, type Setup } from './setup.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
+import type { Members } from './members.ts'
+import { WeixinConfigSchema, type WeixinConfig } from '../sources/weixin-config.ts'
 
 /**
  * Indicates an optimistic concurrency conflict when saving or syncing a settings block against a stale revision.
@@ -54,6 +56,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
 
 /** Host dependencies used by `Settings`. */
 export interface SettingsHost {
+  readonly members?: Members
   readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'get'>
   readonly sources: SourceRegistry
   /** Notified when a settings save changes the policy version. */
@@ -86,6 +89,36 @@ export class Settings {
   private readonly retries = new Map<string, { timer: ReturnType<typeof setTimeout>; wait: number }>()
   constructor(private readonly host: SettingsHost) {
     host.lifetime.addEventListener('abort', () => { for (const { timer } of this.retries.values()) clearTimeout(timer) }, { once: true })
+  }
+  /** Trusted web enrollment only: commit directory, allowlist and QR outcome together without restarting active pollers. */
+  enrollWeixin(config: WeixinConfig, allow: { id: string; name: string } | undefined, commit: () => void, activate = false, personalMember?: string): void {
+    const { store, members, engine, sources, sessions } = this.host
+    const parsed = WeixinConfigSchema.parse(config)
+    store.atomic(() => {
+      const old = store.settings()
+      const fresh = !this.host.setup.configured() && !store.tickets.list().length && !old.sources.github?.config.repository
+      const source = { ...old, sources: { ...old.sources, ...fresh ? { github: { enabled: false, config: {} }, feishu: { enabled: false, config: {} } } : {},
+        ...personalMember ? { personal: { enabled: true, config: {} } } : {},
+        weixin: { enabled: activate ? true : old.sources.weixin?.enabled ?? true, config: parsed } } }
+      const part = source.policy.sources.weixin ?? { allowed: [], admission: {} }
+      const personal = source.policy.sources.personal ?? { allowed: [], admission: {} }
+      const settings = SettingsSchema.parse({ ...source, policy: { ...source.policy, sources: { ...source.policy.sources,
+        ...personalMember ? { personal: { ...personal, allowed: [...personal.allowed.filter(item => item.id !== personalMember), { id: personalMember,
+          name: parsed.members?.find(member => member.id === personalMember)?.displayName }] } } : {},
+        weixin: { ...part, allowed: allow ? [...part.allowed.filter(item => item.id !== allow.id), allow] : part.allowed } } } })
+      members?.sync(settings)
+      const before = policyVersion(old), after = policyVersion(settings)
+      const scope = (version: SettingsValue) => ({ scope: (input: { source: string; meta: Record<string, unknown> }) => sources.scope(input, version) })
+      const effects = policyEffects(store.tickets.open(), old, settings, scope)
+      const record = { source: 'panel' as const, policyVersion: after, policyChanged: before !== after, notified: [...effects.keys()] }
+      store.saveSettings({ ...settings, policy: old.policy }, { ...record, block: 'source:weixin' })
+      store.saveSettings(settings, { ...record, block: 'policy' })
+      commit()
+      if (before !== after) engine.policyChanged(before, after, effects)
+      sessions.notify(...settingsNotice('source:weixin'))
+    })
+    this.host.requestPass()
+    if (!this.host.setup.configured()) this.host.setup.restart()
   }
   /** Schedule exponential backoff retries (1 minute up to 1 hour) after a failed source sync, or clear pending retries on success. */
   private retrySync(id: string, failed: boolean): void {
@@ -164,6 +197,7 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
+    this.host.members?.validate(candidate)
     if (id === 'weixin' && ['accountId', 'ownerId'].some(key => current.sources.weixin?.config[key]
       && current.sources.weixin.config[key] !== candidate.sources.weixin?.config[key]))
       throw new UserError('weixinRebind')
@@ -183,6 +217,7 @@ export class Settings {
     const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope)
     const notified = [...effects.keys()]
     store.atomic(() => {
+      this.host.members?.sync(settings)
       store.saveSettings(SettingsSchema.parse(settings), { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
       if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(old, settings)))
       if (before !== after) engine.policyChanged(before, after, effects)
