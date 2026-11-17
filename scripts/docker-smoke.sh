@@ -34,7 +34,7 @@ docker run --rm --read-only --tmpfs /tmp:noexec,nosuid,nodev --entrypoint node "
 try { require("/opt/dsh/node_modules/node-addon-require-builtin").getBindingInfo(); console.log("Native loader with noexec temporary storage: PASS") }
 catch(error) { console.dir(error,{depth:8});process.exit(1) }'
 conest_container=$(docker create --read-only --tmpfs /tmp:size=67108864,mode=1777,noexec,nosuid,nodev \
-  --cap-drop ALL --security-opt no-new-privileges:true --memory 2g --cpus 2 -v "$conest_volume:/data" \
+  --cap-drop ALL --security-opt no-new-privileges:true --memory 2g --cpus 2 -p 127.0.0.1:3088:3088 -v "$conest_volume:/data" \
   -e CONEST_TEST_API_KEY=offline-test-key "$conest_image" start --patch /data/no-weixin.yml)
 docker start "$conest_container" >/dev/null
 check_ready() {
@@ -47,11 +47,12 @@ tokens=re.findall(r'[?&]token=([A-Za-z0-9_-]+)',open(sys.argv[1]).read())
 print(tokens[-1] if tokens else '')
 PY
 )
-    if [[ -n "$conest_token" ]] && docker exec -e CONEST_SMOKE_TOKEN="$conest_token" "$conest_container" node --input-type=module -e '
-const url="http://127.0.0.1:3088/orchestrator/api/state?token="+process.env.CONEST_SMOKE_TOKEN;
-const response=await fetch(url,{headers:{"x-orchestrator-request":"1"},signal:AbortSignal.timeout(2000)});
-const state=await response.json();
-if(state.health?.runtime?.state!=="ready" || state.setup?.problem!==null || state.load?.maxWorkers!==1)process.exit(1);
+    if [[ -n "$conest_token" ]] && CONEST_SMOKE_TOKEN="$conest_token" python3 -c '
+import os,json,urllib.request
+url="http://127.0.0.1:3088/orchestrator/api/state?token="+os.environ["CONEST_SMOKE_TOKEN"]
+request=urllib.request.Request(url,headers={"x-orchestrator-request":"1"})
+state=json.load(urllib.request.urlopen(request,timeout=2))
+assert state["health"]["runtime"]["state"]=="ready" and state["setup"]["problem"] is None and state["load"]["maxWorkers"]==1
 ' >/dev/null 2>&1; then
       printf '%s\n' 'Main Runtime ready without GitHub or live channel traffic: PASS'
       return

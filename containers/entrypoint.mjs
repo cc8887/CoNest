@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, mkdtempSync, rmSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tmpdir, networkInterfaces } from 'node:os'
 import { parseEnv } from 'node:util'
 
 process.umask(0o077)
@@ -35,7 +35,7 @@ function ensureProfile() {
   const save = (file, text) => { if (!existsSync(file)) writeFileSync(file, text, { flag: 'wx', mode: 0o600 }) }
   save(join(profile, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   const template = readFileSync(join(app, 'examples/weixin.profile.cordis.patch.yml'), 'utf8')
-  save(join(profile, 'cordis.patch.yml'), template.replace('host: 127.0.0.1', 'host: 0.0.0.0')
+  save(join(profile, 'cordis.patch.yml'), template.replace('host: 127.0.0.1', "host: !!js ctx.webStartup.host ?? '127.0.0.1'")
     .replace('<absolute private Runtime state directory>', JSON.stringify(join(data, 'runtime'))))
   const linked = join(profile, 'node_modules/dsh-superagent')
   if (!existsSync(linked)) symlinkSync(app, linked, 'dir')
@@ -86,7 +86,12 @@ try {
     if (!existsSync(join(data, 'runtime/orchestrator.sqlite'))) throw new Error('Bind with m0 login, then run init before starting the Runtime')
     ensureProfile()
     const env = modelEnv()
-    try { await child(process.execPath, [dsh, '--profile', 'conest', ...args, '--no-open']) } finally { env.dispose() }
+    const addresses = Object.values(networkInterfaces()).flat().filter(value => value?.family === 'IPv4' && !value.internal)
+    const address = addresses[0]?.address
+    const network = process.env.CONEST_CONTAINER === '1'
+      ? ['--host', address || '127.0.0.1', '--port', '3088', '--public-url', 'http://127.0.0.1:3088',
+        '--trusted-host', '127.0.0.1:3088', 'localhost:3088'] : []
+    try { await child(process.execPath, [dsh, '--profile', 'conest', ...args, ...network, '--no-open']) } finally { env.dispose() }
   } else throw new Error('Unknown container command; use help')
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Container command failed')

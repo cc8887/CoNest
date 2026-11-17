@@ -21,7 +21,7 @@ it('initializes a private text-only profile and retains operator edits on restar
   const { app, data, run } = fixture()
   expect(run('profile').status).toBe(0)
   const profile = join(data, 'dsh/profiles/conest'), file = join(profile, 'cordis.patch.yml')
-  expect(readFileSync(file, 'utf8')).toContain('host: 0.0.0.0')
+  expect(readFileSync(file, 'utf8')).toContain("host: !!js ctx.webStartup.host ?? '127.0.0.1'")
   expect(readFileSync(file, 'utf8')).toContain(JSON.stringify(join(data, 'runtime')))
   expect(statSync(file).mode & 0o777).toBe(0o600)
   expect(readlinkSync(join(profile, 'node_modules/dsh-superagent'))).toBe(app)

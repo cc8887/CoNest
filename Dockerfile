@@ -29,7 +29,7 @@ LABEL org.opencontainers.image.title="CoNest" \
       org.opencontainers.image.revision="$REVISION" \
       org.opencontainers.image.licenses="MIT"
 # Load the immutable native binaries directly; the private loader otherwise copies them into noexec /tmp.
-ENV NODE_ENV=production CONEST_VERSION=$VERSION HOME=/data/home DSH_HOME=/data/dsh NARB_DISABLE_NATIVE_CACHE=1
+ENV NODE_ENV=production CONEST_VERSION=$VERSION HOME=/data/home DSH_HOME=/data/dsh NARB_DISABLE_NATIVE_CACHE=1 CONEST_CONTAINER=1
 WORKDIR /opt/conest
 COPY --from=build /opt/conest/node_modules ./node_modules
 COPY --from=build /opt/conest/lib ./lib
