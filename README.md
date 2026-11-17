@@ -60,7 +60,7 @@ pnpm check
 
 `pnpm check` 依次做类型检查、测试和构建。测试不需要模型 API 密钥。家庭授权测试在 `tests/family-authorization.spec.ts`，随 `pnpm test` 一起跑。
 
-微信主链路复用原有 Store、Engine、Ticket、Attention 和 outbox，可禁用 GitHub。`pnpm weixin:setup --web --state-dir /absolute/state` 初始化空成员目录，默认 1 个 worker。管理员登录 DSH 后，从 **Superagent → 来源 → 成员注册与微信绑定** 创建成员；系统生成二维码，扫码确认后自动保存凭证、关联成员并加入允许名单。每位成员就是一个独立租户，通过管理员交付的一次性链接进入自己的网页，可提交任务、查看结果、回复追问、停止和重试。个人页面默认监听 `127.0.0.1:3089`，DSH 管理端保留在 `127.0.0.1:3088`。原单 owner / `--members-file` 初始化保留兼容。步骤见[微信主 Runtime 文档](docs/conest/weixin-runtime.md)。
+微信主链路复用原有 Store、Engine、Ticket、Attention 和 outbox，可禁用 GitHub。`pnpm weixin:setup --web --state-dir /absolute/state` 初始化空成员目录，默认 1 个 worker。管理员打开启动地址后直接进入 **CoNest 后台 → 成员与微信** 创建成员；系统生成二维码，扫码确认后自动保存凭证、关联成员并加入允许名单。每位成员就是一个独立租户，通过管理员交付的一次性链接进入自己的网页，可提交任务、查看结果、回复追问、停止和重试。个人页面默认监听 `127.0.0.1:3089`，DSH 管理端保留在 `127.0.0.1:3088`。原单 owner / `--members-file` 初始化保留兼容。步骤见[微信主 Runtime 文档](docs/conest/weixin-runtime.md)。
 
 M0 保留 `pnpm m0 model/login/weixin` 供排查连接，已完成真实 DSH/hy4 与手机收件确认；它自身不创建工单。`pnpm test:local-mock` 独立启动真实 DSH/Runtime，通过网页创建并模拟扫码绑定 10 个成员，验证 100 个工单、排队重启、私聊追问、越权拒绝及原账号回传，不需要真实凭证。`pnpm check` 覆盖全部回归、类型检查与构建。
 

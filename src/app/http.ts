@@ -234,6 +234,19 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
   if (ctx.webServer.host !== '127.0.0.1') throw new Error('Orchestrator management requires a loopback Web server')
   const table = routes(runtime)
   const disposers = [
+    ...runtime.registration ? [ctx.webServer.register({ kind: 'exact', path: '/', handler: (req, res) => {
+      const host = req.headers.host ?? ''
+      if (![`127.0.0.1:${ctx.webServer.port}`, `localhost:${ctx.webServer.port}`].includes(host)
+        || req.headers.origin && req.headers.origin !== `${ctx.webServer.protocol ?? 'http:'}//${host}`) {
+        json(res, 403, { error: 'Loopback management host required' }); return
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { allow: 'GET, HEAD' }); res.end(); return }
+      const connection = ctx.get('connection') as { authorizeIndex(request: IncomingMessage, response: ServerResponse): boolean } | undefined
+      if (!connection?.authorizeIndex) { json(res, 503, { error: '后台管理登录尚未就绪' }); return }
+      // Preserve DSH's launch-token exchange and signed browser cookie before selecting the product landing page.
+      if (!connection.authorizeIndex(req, res)) return
+      res.writeHead(303, { location: PORTAL_ADMIN_PATH + '/', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end()
+    } })] : [],
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       const connection = ctx.get('connection') as { requestRejection(request: { headers: IncomingMessage['headers'] }): number | undefined } | undefined

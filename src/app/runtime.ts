@@ -221,10 +221,10 @@ export class Runtime extends Service implements SourceHost {
   /** Hold evaluation, dispatch, and outbound delivery while paused or awaiting setup; sources still record incoming triggers. */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
   private async initialize(): Promise<void> {
+    // Install the product landing route before yielding, so browser handoff cannot fall through to the DSH index.
+    this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     await this.portalServer?.start()
     this.portal.resume()
-    // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
-    this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     if (!await this.setup.run(this.store.settings())) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
       return
@@ -242,8 +242,9 @@ export class Runtime extends Service implements SourceHost {
   }
   private httpHost(): HttpHost {
     const runtime = this
-    const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
-    return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
+    const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks, setup, passes } = this
+    return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks,
+      get ready() { return runtime.ready },
       registration: { portal: this.portal, origin: () => this.portalServer?.origin },
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },

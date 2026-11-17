@@ -50,7 +50,10 @@ PY
 import os,json,urllib.request,http.cookiejar,urllib.error
 origin="http://127.0.0.1:3088"
 client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-client.open(origin+"/?token="+os.environ["CONEST_SMOKE_TOKEN"],timeout=2).read()
+landing=client.open(origin+"/?token="+os.environ["CONEST_SMOKE_TOKEN"],timeout=2)
+assert landing.geturl()==origin+"/orchestrator/registration/"
+assert b"CoNest" in landing.read()
+assert client.open(origin+"/index.html",timeout=2).status==200
 headers={"x-orchestrator-request":"1","Origin":origin}
 state=json.load(client.open(urllib.request.Request(origin+"/orchestrator/api/state",headers=headers),timeout=2))
 assert state["health"]["runtime"]["state"]=="ready" and state["setup"]["problem"] is None and state["load"]["maxWorkers"]==1

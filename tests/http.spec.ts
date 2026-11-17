@@ -9,6 +9,32 @@ import { SetupError } from '../src/setup.ts'
 
 type Handler = (req: unknown, res: unknown) => Promise<void>
 type Headers = Record<string, string | undefined>
+
+it('authenticates the launch URL before opening the CoNest backend and rejects untrusted entry requests', async () => {
+  let landing: Handler | undefined
+  const connection = { authorizeIndex: (req: { url: string; headers: Headers }, res: { writeHead(code: number, headers?: Headers): void; end(): void }) => {
+    if (req.url === '/?token=fixture-launch') { res.writeHead(303, { location: './', 'set-cookie': 'operator=fixture; HttpOnly' }); res.end(); return false }
+    if (req.headers.cookie === 'operator=fixture') return true
+    res.writeHead(401); res.end(); return false
+  } }
+  const ctx = { get: () => connection, webServer: { host: '127.0.0.1', port: 3082, protocol: 'http:',
+    register: (route: { kind: string; path: string; handler: Handler }) => { if (route.kind === 'exact' && route.path === '/') landing = route.handler; return () => {} } } }
+  registerHttp(ctx as never, { registration: {} } as HttpHost)
+  expect(landing).toBeTypeOf('function')
+  async function call(url = '/', headers: Headers = {}, method = 'GET') {
+    let status = 0, response: Headers = {}
+    await landing!({ method, url, headers: { host: '127.0.0.1:3082', ...headers } },
+      { writeHead: (value: number, fields: Headers = {}) => { status = value; response = fields }, end: () => {} })
+    return { status, headers: response }
+  }
+  expect(await call('/?token=fixture-launch')).toMatchObject({ status: 303, headers: { location: './', 'set-cookie': 'operator=fixture; HttpOnly' } })
+  expect(await call()).toMatchObject({ status: 401 })
+  expect(await call('/', { cookie: 'operator=fixture' })).toMatchObject({ status: 303, headers: { location: '/orchestrator/registration/' } })
+  expect(await call('/', { cookie: 'operator=fixture' }, 'HEAD')).toMatchObject({ status: 303 })
+  expect(await call('/', { cookie: 'operator=fixture' }, 'POST')).toMatchObject({ status: 405 })
+  expect(await call('/', { host: 'evil.example:3082', cookie: 'operator=fixture' })).toMatchObject({ status: 403 })
+  expect(await call('/', { origin: 'https://evil.example', cookie: 'operator=fixture' })).toMatchObject({ status: 403 })
+})
 /** Mount management HTTP routes on a fake web server and return a request helper that includes default panel headers. */
 function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1') {
   let handler: Handler = async () => {}

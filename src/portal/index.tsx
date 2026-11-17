@@ -86,6 +86,7 @@ function Admin() {
     catch { setNotice('请选中下方链接手动复制。') }
   }
   return <div className="shell"><aside className="sidebar"><Brand /><div className="nav-label">平台管理</div><div className="nav-item active">◇　成员与微信</div>
+    <a className="nav-item console-link" href="/index.html" target="_blank" rel="noopener noreferrer">⚙　高级控制台 ↗</a>
     <div className="sidebar-note">每位成员一个独立空间<br />身份、工单与结果分别保存</div></aside><main className="main">
     <div className="topline"><span>管理工作台 / 成员</span><span className="pill">管理员</span></div>
     <header className="hero"><span className="eyebrow">A SPACE FOR EVERYONE</span><h1>让每位成员拥有自己的空间</h1><p>创建成员，扫码连接微信。个人任务和结果只对本人可见。</p></header>

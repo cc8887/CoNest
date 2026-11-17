@@ -53,5 +53,5 @@ export function main():void {
   if (values.web) initializeWeixinWeb(input)
   else if (values['members-file']) initializeWeixinMembers({...input,membersFile:values['members-file']})
   else initializeWeixin({...input,credentialsFile:values['credentials-file']!})
-  console.log('Initialized a fresh Weixin Runtime. Configure the same DSH provider, start DSH, and open Superagent → Sources → Member registration.')
+  console.log('Initialized a fresh Weixin Runtime. Configure the same DSH provider, start DSH, and open the launch URL to enter the CoNest backend.')
 }

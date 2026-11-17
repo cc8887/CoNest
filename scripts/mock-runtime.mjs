@@ -175,6 +175,11 @@ async function start() {
       const response = await fetch(`${origin}/?token=${token}`, { redirect: 'manual' })
       operatorCookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
       if (!operatorCookie) return false
+      const landing = await fetch(`${origin}/`, { headers: { cookie: operatorCookie }, redirect: 'manual' })
+      assert.equal(landing.status, 303, 'The default launch did not open the CoNest backend')
+      assert.equal(landing.headers.get('location'), '/orchestrator/registration/')
+      const consolePage = await fetch(`${origin}/index.html`, { headers: { cookie: operatorCookie } })
+      assert.equal(consolePage.status, 200, 'The authenticated advanced DSH console is unavailable')
     }
     return (await api('state')).health.runtime.state === 'ready'
   }, 'Runtime ready')
@@ -300,6 +305,7 @@ try {
   assert.equal(modelError, undefined)
   const evidence = { transport: 'mock iLink', inference: 'local scripted OpenAI SSE (not Tencent hy4)',
     runtime: `native DSH ${dshVersion} + real main Runtime/Engine/SQLite/Session/Loop/pi-ai/outbox`,
+    landing: 'signed launch token opens CoNest backend; advanced DSH console remains authenticated',
     registration: webEnrollment ? '10 web-created tenants; QR confirmation saved bindings and allowlists automatically' : 'preconfigured member file',
     admittedUsers: users.length, privateRouters: new Set(routers).size, tickets: tickets.items.length,
     queuedRestart: { running: 1, queued: 99, maxWorkers: 1 }, foreignRead: 'rejected by real DSH tool execution',
