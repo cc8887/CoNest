@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, mkdtempSync, rmSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { tmpdir, networkInterfaces } from 'node:os'
+import { tmpdir } from 'node:os'
 import { parseEnv } from 'node:util'
 
 process.umask(0o077)
@@ -72,7 +72,7 @@ try {
     const env = ['model', 'weixin'].includes(operation) ? modelEnv() : undefined
     try {
       await child(process.execPath, [join(app, 'lib/m0.js'), ...args, '--state-dir', join(data, 'm0'),
-        ...(env ? ['--env-file', env.file] : []), ...(operation === 'login' ? ['--listen-host', '0.0.0.0', '--listen-port', '3087'] : [])])
+        ...(env ? ['--env-file', env.file] : []), ...(operation === 'login' ? ['--listen-host', '127.0.0.1', '--listen-port', '3087'] : [])])
     } finally { env?.dispose() }
   } else if (command === 'profile') {
     ensureProfile(); console.log('Private container profile initialized; no account was bound and no polling started.')
@@ -86,10 +86,8 @@ try {
     if (!existsSync(join(data, 'runtime/orchestrator.sqlite'))) throw new Error('Bind with m0 login, then run init before starting the Runtime')
     ensureProfile()
     const env = modelEnv()
-    const addresses = Object.values(networkInterfaces()).flat().filter(value => value?.family === 'IPv4' && !value.internal)
-    const address = addresses[0]?.address
     const network = process.env.CONEST_CONTAINER === '1'
-      ? ['--host', address || '127.0.0.1', '--port', '3088', '--public-url', 'http://127.0.0.1:3088',
+      ? ['--host', '127.0.0.1', '--port', '3088', '--public-url', 'http://127.0.0.1:3088',
         '--trusted-host', '127.0.0.1:3088', 'localhost:3088'] : []
     try { await child(process.execPath, [dsh, '--profile', 'conest', ...args, ...network, '--no-open']) } finally { env.dispose() }
   } else throw new Error('Unknown container command; use help')

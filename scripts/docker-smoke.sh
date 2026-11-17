@@ -34,7 +34,7 @@ docker run --rm --read-only --tmpfs /tmp:noexec,nosuid,nodev --entrypoint node "
 try { require("/opt/dsh/node_modules/node-addon-require-builtin").getBindingInfo(); console.log("Native loader with noexec temporary storage: PASS") }
 catch(error) { console.dir(error,{depth:8});process.exit(1) }'
 conest_container=$(docker create --read-only --tmpfs /tmp:size=67108864,mode=1777,noexec,nosuid,nodev \
-  --cap-drop ALL --security-opt no-new-privileges:true --memory 2g --cpus 2 -p 127.0.0.1:3088:3088 -v "$conest_volume:/data" \
+  --cap-drop ALL --security-opt no-new-privileges:true --memory 2g --cpus 2 --network host -v "$conest_volume:/data" \
   -e CONEST_TEST_API_KEY=offline-test-key "$conest_image" start --patch /data/no-weixin.yml)
 docker start "$conest_container" >/dev/null
 check_ready() {

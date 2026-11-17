@@ -2,9 +2,7 @@ services:
   conest:
     image: conest:0.1.0-m0.1
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3087:3087"
-      - "127.0.0.1:3088:3088"
+    network_mode: host
     env_file:
       - ./secrets/model-test.env
     volumes:

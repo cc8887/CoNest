@@ -2,6 +2,8 @@
 
 面向 N100 的 `linux/amd64`，当前仅允许一位绑定 owner 的文本私聊。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主不必升级 Node 或 pnpm。镜像没有模型密钥、微信凭证或私聊数据。不要并行轮询同一 bot。
 
+上游管理服务强制回环监听，本版使用 Linux 的 `network_mode: host`，保持扫码和管理服务都监听 `127.0.0.1`。它共享容器引擎宿主的网络，不使用桥接端口映射。Docker Desktop 需 4.34 或更新版本并在设置中启用 host networking，见[官方说明](https://docs.docker.com/engine/network/drivers/host/)；WSL/Podman 虚拟机到 Windows 的访问仍需现场验证。
+
 Release 提供镜像归档、源码包、`compose.yml`、模型环境模板及 `SHA256SUMS`。本仓库为私有仓库，下载需登录有权限的 GitHub 账号。下载同一个版本的全部附件到独立目录，先运行：
 
 ```bash
@@ -25,7 +27,7 @@ docker compose run --rm conest m0 model
 接着在终端启动绑定，打开其输出的 `http://127.0.0.1:3087/<随机路径>/` 网页扫码。需要 PIN 时只在该网页输入：
 
 ```bash
-docker compose run --rm --service-ports conest m0 login
+docker compose run --rm conest m0 login
 ```
 
 绑定成功后初始化一个新 Runtime 并启动：
@@ -38,7 +40,7 @@ docker compose logs -f conest
 
 `init` 从同一数据卷中的 M0 绑定导出一个账号，创建原有 `orchestrator.sqlite`，默认禁用 GitHub/飞书并配置单 worker。已有数据库时拒绝覆盖，重启只需 `docker compose up -d`。多个 M0 绑定需用 `init --account <bot-id>` 明确选择。迁移已有账号可在卷中放置私有 `weixin-account.json`，需匹配 UID 1000 和 0600 权限；不要复制他人的状态或复用旧主 Session 换 owner。
 
-服务日志会输出带访问凭据的 `http://127.0.0.1:3088/` 管理地址，按私有信息保管。DSH 绑定容器的一个具体 IPv4 地址，每次启动重新解析，明确只信任 `127.0.0.1:3088` 和 `localhost:3088` 这两个宿主访问地址。扫码端口在容器内支持端口映射。Compose 只发布宿主 `127.0.0.1:3087/3088`，不要改成公网或局域网监听。扫码网页仍校验随机路径、Host 和 PIN POST 的同源条件。主 Runtime 面板继续校验认证与同源请求。
+服务日志会输出带访问凭据的 `http://127.0.0.1:3088/` 管理地址，按私有信息保管。DSH 与扫码页面都绑定 `127.0.0.1`，管理端口只信任 `127.0.0.1:3088` 和 `localhost:3088`。不要改成公网或局域网监听。扫码网页仍校验随机路径、Host 和 PIN POST 的同源条件。主 Runtime 面板继续执行回环监听、认证与同源检查。
 
 数据都在 `conest-data` 卷：`m0/` 绑定与连接日志、`weixin-account.json`、`runtime/` 工单与投递状态、`dsh/` profile 与 Session、`home/` 宿主缓存。镜像升级不应删除该卷。`docker compose down` 停止服务并保留数据；`down -v` 会删除数据，不作为普通停止或升级命令。
 
