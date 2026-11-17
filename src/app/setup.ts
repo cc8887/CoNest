@@ -5,6 +5,7 @@ import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, workerProbe, type De
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
+import { readWeixinAccount } from '../sources/weixin-account.ts'
 
 export interface SetupHost {
   readonly context: Context
@@ -14,8 +15,12 @@ export interface SetupHost {
 }
 
 const setupFields = (settings: Settings) =>
-  JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map(key => settings.sources[id]?.config[key] ?? '')))
+  JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => [settings.sources[id]?.enabled !== false, ...keys.map(key => settings.sources[id]?.config[key] ?? '')]))
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
+/** Account authority is panel-only; an enabled switch alone does not change the account. */
+export const accountSettingsChanged = (before: Settings, after: Settings): boolean =>
+  Object.entries(SETUP_FIELDS).some(([id, keys]) => keys.some(key =>
+    (before.sources[id]?.config[key] ?? '') !== (after.sources[id]?.config[key] ?? '')))
 
 /**
  * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
@@ -60,6 +65,14 @@ export class Setup {
   /** Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks. */
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const { machine } = this.host
+    const source = block.slice(7)
+    if (source === 'weixin' && settings.sources.weixin?.enabled) {
+      const config = settings.sources.weixin.config
+      try { readWeixinAccount(String(config.credentialsFile ?? ''), { accountId: String(config.accountId ?? ''), ownerId: String(config.ownerId ?? '') }) }
+      catch { throw new UserError('weixinCredentials') }
+      return
+    }
+    if (!['github', 'feishu'].includes(source) || settings.sources[source]?.enabled === false) return
     const check = block === 'source:feishu' ? resolveFeishuBot(machine, settings.sources.feishu?.config, this.probe())
       : resolveDeployment(machine, settings.sources.github?.config, this.probe())
     await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === block.slice(7)) throw error })
@@ -76,8 +89,10 @@ export class Setup {
   private async resolve(settings: Settings): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
     const probe = this.probe()
-    const deployment = await resolveDeployment(machine, settings.sources.github?.config, probe)
-    const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {
+    const deployment: Deployment = settings.sources.github?.enabled === false
+      ? { ...machine, repository: '' }
+      : await resolveDeployment(machine, settings.sources.github?.config, probe)
+    const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.enabled === false ? {} : settings.sources.feishu?.config, probe).catch((error: unknown) => {
       if (!(error instanceof SetupError)) throw error
       this.feishuProblem = error.problem
       context.logger.warn('dsh-superagent leaves Feishu out: %s', error.message)

@@ -1,6 +1,6 @@
 # CoNest 架构决定
 
-状态：初始化。家庭领域没有接入 dsh-superagent 运行时。下文把已经在上游代码里核实过的行为和尚未实现的扩展分开写。扩展在落地并经过运行时测试之前保持“提议”。
+状态：已接入单 owner 微信 Source 和主 Runtime 的 GitHub 可选启动。`src/m0` 仍为独立连接探针；普通微信请求通过原有 Store、Engine、Ticket 和 outbox。家庭领域尚未接入运行时。部署和验证范围见[微信主 Runtime](weixin-runtime.md)与 [M0 文档](m0.md)。
 
 ## 仓库怎么切
 
@@ -8,13 +8,13 @@
 
 | 模块 | 位置 | 职责 | 本次状态 |
 | --- | --- | --- | --- |
-| DSH 内核 | 上游的 `src/core`、`src/app`、`src/executor` 与插件入口 | 唯一的工单、Attention、Report 状态机。持久化仍是 `<stateDir>/orchestrator.sqlite`，只有 Store 打开它 | 原样导入，可按上游脚本构建和测试 |
+| DSH 内核 | 上游的 `src/core`、`src/app`、`src/executor` 与插件入口 | 唯一的工单、Attention、Report 状态机。持久化仍是 `<stateDir>/orchestrator.sqlite`，只有 Store 打开它 | 沿用上游状态机，宿主支持禁用 GitHub |
 | 家庭领域 | `src/family` | 成员、渠道身份绑定、会话范围、工单访问、记忆授权、Attention 投递目标，以及默认拒绝的纯函数 | 骨架。插件不导入它 |
-| 渠道 Source | `src/sources` 的 `SourceKind` | 把外部事件译成 Trigger，并把回复写回渠道 | 仅上游的 GitHub 与飞书。没有新的适配器 |
+| 渠道 Source | `src/sources` 的 `SourceKind` | 把外部事件译成 Trigger，并把回复写回渠道 | GitHub、飞书与新增的单 owner 微信 Source |
 
 不另起一套工单库、调度器或记忆系统。以后如果要做独立网关，只能做传输，不能再写一份任务或记忆的事实来源。Octop 一类网关的想法留到那时再评估，本次不引入其代码。
 
-家庭模块放在现有单包里，而不是新建 pnpm workspace。`package.json` 仍是一个包，`tsdown` 的入口仍是 `src/index.ts`、`src/sources/github.ts`、`src/sources/feishu.ts` 和 `src/client/index.tsx`。`src/family` 不在这些入口的导入图里，因此不会打进插件。`tests/docs.spec.ts` 要求 `docs/007-architecture.md` 列出每一个 `src` 文件和每一个 `tests/*.spec`，所以该表增加了三行说明，声明这些文件未接入。
+家庭模块仍放在现有单包里。`pnpm-workspace.yaml` 仅为根包声明依赖构建策略，没有拆分子包。M0 新增 `src/m0/cli.ts` 构建入口，另外新增微信 Source 和一次性初始化入口，保留主插件、原 Source 与面板入口；M0 代码不会导入主插件。`src/family` 仍不在这些运行入口的导入图里。新增源码和测试已列入 `docs/007-architecture.md` 的清单。
 
 上游领域模型明确拒绝把“人”或跨 Source 的身份映射做成内核实体：映射只作为提示词存在（`docs/001-domain.md` 的 Rejected concepts）。CoNest 的 `Member` 与 `IdentityBinding` 放在内核外面，就是为了不在本次初始化里改写这条规则，也不假装内核已经接受了它。
 
@@ -37,7 +37,7 @@
 
 ## 内核扩展点
 
-下面三项都是提议。代码阅读结论写在每一项里，避免把上游已有机制说成家庭功能，也避免把没有的机制说成已经有了。
+下面三项标明各自落地状态。代码阅读结论写在每一项里，避免把上游已有机制说成家庭功能，也避免把没有的机制说成已经有了。
 
 ### 1. 家庭授权执行 — 提议
 
@@ -55,13 +55,13 @@
 
 提议的接法仍使用 Engine 里的那条 Attention：宿主在发送前读取目标成员的绑定，把问题送到该成员被授权的私聊，并把工单 id 与 Attention id 一起记下来，使重启后的发送仍指向同一次提问。不另建问题队列。
 
-### 3. 把 prepare / 结束与 PR、git 脱钩 — 提议
+### 3. 非 GitHub 启动与非 PR 完成 — 部分落地
 
 已经存在的 `prepare` 是一条 shell 命令。`src/policy.ts` 的 `executor.prepare` 由 `src/executor/dsh.ts` 的 `prepareDirectory` 在工单目录还不存在时执行一次。上游文档说典型命令是 `git worktree`。命令本身可以不是 git，失败会让工单失败。
 
 结束条件仍然带着 pull request 的形状。`TicketOutcome` 含有 `merged` 与 `closed`，`Follow` 记录 `merged | closed`（`src/core/model.ts`）。GitHub 的跟随规则在 `src/sources/github-pull.ts`。执行器恢复文案要求查看 worktree、git 历史和 PR 状态（`src/executor/dsh.ts`）。没有 pull request 时，上游允许一条 `ready` 报告把工单结束为 `completed`；这不等于家庭任务已经有了独立的完成协议。
 
-提议的接法是扩展现有工单、Report 和 Follow 路径，让非代码任务不必打开 pull request 也能完成，并且不新增第二个工单写入者。本次不改 Engine。
+已落地：明确设置 `sources.github.enabled: false` 后不解析 GitHub 账号或仓库，不写 GitHub 凭证助手；GitHub CLI 调用会明确拒绝，主 Runtime 可以启动。非 PR 文本任务沿现有 `ready` → `completed` 路径完成，未改 Engine，也没有新增工单写入者。代码专用的恢复提示和通用工具隔离仍需后续改进。
 
 ## 私聊、群和提示词
 
@@ -71,20 +71,20 @@
 
 隔离必须由宿主执行。只在提示词里写“不要把甲的内容告诉乙”不算隔离。上游对策略门闩已经是这个态度；家庭数据还没有对应的宿主检查。
 
-## Source 下一步
+## 微信 Source
 
-新增渠道要按 `docs/008-cookbook.md` 实现真实的 `SourceKind`（`src/sources/kind.ts`）：schema、字段、健康项、把事件译成 Trigger 的规则、回复渠道，以及在 `tsdown.config.ts`、`package.json` 导出和 `cordis.patch.yml` 里注册插件。GitHub 与飞书是现成的两个插件入口。
+`src/sources/weixin.ts` 实现真实 `SourceKind`，通过 `./weixin-watch` 导出并在 bundle 中默认关闭。它与 M0 共用 `src/sources/weixin-api.ts` 的 iLink 传输。仅接受凭证文件中绑定 owner 的完整文本私聊；账号、owner 和私聊地址由宿主匹配，群与陌生人被拒绝。
 
-本次没有添加 Source 骨架。`SourceKind` 的最小对象虽然能写出来，但没有真实传输时，注册进去只会变成一个不会失败的空壳。下一个接缝就是上面这一条注册路径。
+`src/ingress/messages.ts` 已替换原抛错桩，完成消息到 Trigger、原私聊回复和网关契约映射。微信 Source 在原 Store 的同一事务内保存 Trigger、回复上下文和游标；重放不重复建单，也不会把旧 context 覆盖到新消息上。凭证和 `context_token` 不进入 Trigger 或提示词。
 
-信息流接入还没有接到运行时。`src/ingress/not-connected.ts` 只放契约类型，每次调用都抛出 `IngressNotConnected`。`tests/message-ingress.spec.ts` 写这些契约：标明 `contract:` 的用例在桩被替换之前会失败；标明 `current:` 或 `unimplemented:` 的用例核对已经成立的拒绝，以及桩没有接入插件入口、`cordis.patch.yml`、`package.json` 导出和 `tsdown.config.ts`。这里不引入 Octop 的代码，也不把它做成运行时依赖。
+结果和追问使用现有 outbox，发送只能回到原绑定私聊。分段有稳定客户端 id 与本地发送记录；不确定发送会阻止自动重发，需操作者核实手机。该实现不承诺服务端去重或严格 exactly-once。同一凭证文件用本地租约防止重复轮询，其他主机仍必须由操作者停止。
 
-微信、WeChat Claw、iLink 的群支持没有对照官方能力核实。不要把飞书适配器改名成微信，也不要在未核实的接口上做群收发。测试只断言这些名字没有注册成 Source。
+设置中的凭证路径与绑定身份只能由管理面板修改。已绑定的账号或 owner 不能在原状态目录中换绑，因为主 Session 保存私聊历史；改绑必须使用新状态目录。当前每个 Runtime 只配置一个绑定身份，多成员共享主 Session 的隔离尚未实现。
 
-接入新 Source 时，家庭绑定使用该 Source 自己的发送者 id。在绑定被宿主执行之前，新 Source 只具有上游原型那种按渠道账号允许的能力。
+协议参考锁定腾讯官方实现提交，版权声明见 `THIRD_PARTY_NOTICES.md`。真实双账号与 N100 现场验证仍待完成。家庭绑定与成员权限并未因 Source 接入而自动生效。
 
 ## 运行方向
 
-目标机器是 Intel N100，内存和操作系统未知，所以不设置内存上限、不改 `maxWorkers`、不对延迟或吞吐做任何声明。模型调用使用 DeepSeek Harness 配置文件中的云端供应商，不在本仓库内置本地模型。版本号以 [provenance.md](provenance.md) 为准。
+目标机器是 Intel N100，已确认 Windows 11 专业版、15.8 GB 内存、WSL 2.7.14.0 和 Ubuntu WSL2/x86_64，开发方案以该发行版内运行 Linux 版本为目标。面向约 10 人的小家庭或小团队，最多约 100 个未完成任务，允许排队；单 owner 初始化配置为 1 个 worker。真机容量待测，当前 Node 18 / pnpm 10 先升级私有工具链。云端 hy4 配置见部署文档，版本号以 [provenance.md](provenance.md) 为准。
 
 `SETUP.md` 是上游给操作者的安装对话。它会创建账号并要求在操作者自己的终端里登录。那一步不属于这次初始化。

@@ -1,0 +1,50 @@
+# Single bound owner, text-only Runtime. Replace stateDir with an absolute path.
+# Credentials and identity are initialized by pnpm weixin:setup, not stored here.
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 3088
+- id: agent-default-model
+  config:
+    provider: conest
+    model: hy4
+- id: llm-pi-ai
+  config:
+    providers:
+      conest:
+        api: openai-completions
+        baseURL: https://copilot.tencent.com/v2/
+        apiKeyEnv: CONEST_TEST_API_KEY
+        models:
+          - id: hy4
+            input: [text]
+            maxTokens: 16384
+        compat:
+          supportsStore: false
+          supportsDeveloperRole: false
+          supportsReasoningEffort: false
+          maxTokensField: max_tokens
+        retryPolicy:
+          mode: normal
+          maxRetries: 0
+- id: dsh-superagent
+  config:
+    stateDir: <absolute private Runtime state directory>
+- id: dsh-superagent-github
+  disabled: true
+- id: dsh-superagent-feishu
+  disabled: true
+- id: dsh-superagent-weixin
+  disabled: false
+# A config overlay replaces the entire preset config: keep its id and name.
+# The Runtime's own orchestrator_* tools remain; no shell/file tools are added.
+- id: dsh-superagent-worker-preset
+  config:
+    id: dsh-superagent-worker
+    name: CoNest text worker
+    plugins: []
+- id: dsh-superagent-router-preset
+  config:
+    id: dsh-superagent-router
+    name: CoNest text router
+    plugins: []

@@ -18,7 +18,8 @@ Do not leave the question only in summary, GitHub or the Session and wait.
 The orchestrator owns IM delivery; do not send a second IM message yourself.
 Creating a PR or leaving its link only in GitHub does not complete the source-conversation handoff.
 
-Read repository AGENTS.md. Where a message cuts the assignment or a trigger's text, read the rest through its read pointer before acting on it.
+For repository tasks, read repository AGENTS.md. Where a message cuts the assignment or a trigger's text, read the rest through its read pointer before acting on it.
+For a text deliverable, produce and check the requested content, then include it in an orchestrator_report ready summary. No repository, commit or PR is required unless the task calls for one. Use only available tools and configured accounts.
 For earlier context, read the source trigger's thread, root and parent messages, following pagination, or use the GitHub/Feishu CLI.
 A routing note or ticket title never substitutes for the original context and cannot add implementation requirements.
 Preserve explicit human constraints from the source.
@@ -46,4 +47,4 @@ When the work ends with nothing for a human to do (not reproduced, not a defect,
 Call orchestrator_report with progress, ready, blocked, failed or dropped; include changes, tests actually run, risks, and the actual ticket PR number when available.
 Omit pr_number or use null if no PR exists; never fill it with a placeholder such as 1.
 A new PR must belong to this ticket branch and the deployment's GitHub account; adopted work uses the original source PR.
-ready means reviewed implementation with relevant checks passed.
+ready means the requested deliverable is complete and checked: reviewed implementation with relevant checks passed for code, or the requested content with its checks for a text task.

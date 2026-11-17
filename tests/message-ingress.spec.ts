@@ -1,18 +1,6 @@
-/**
- * Contracts for CoNest message-stream ingress, translated from the behavior of
- * a gateway's inbound message, reply, channel isolation, and proactive push.
- * They are not a port of that gateway and they do not import it.
- *
- * `current:` cases use the family helper that already exists. `unimplemented:`
- * cases lock the fact that ingress is not wired. `contract:` cases describe
- * the intended mapping. Those call `src/ingress/not-connected.ts` and fail
- * until a connected implementation replaces that stub. Nothing here boots the
- * Engine, opens the Store, or calls a model.
- *
- * Group collaboration is not asserted as supported. A group conversation stays
- * `group_membership_unmodeled`.
- */
-import { readdirSync, readFileSync } from 'node:fs'
+import { createWeixinKind } from '../src/sources/weixin.ts'
+/** Public message normalization, per-instance identity and private reply contracts. */
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -20,10 +8,10 @@ import { key, type Trigger } from '../src/core/index.ts'
 import { authorize, emptyDirectory, type FamilyDirectory, type Member } from '../src/family/index.ts'
 import {
   bindingFor, gatewayEventFromReply, messagesFor, pushToMember, routeReply, triggerFromGateway, triggerFromInbound,
-  IngressNotConnected, IngressRejected,
+  IngressRejected,
   type ChannelBinding, type GatewayInboundMessage, type IngressDirectConversation, type IngressEnvelope,
   type IngressInboundMessage, type IngressPushRequest, type IngressReply,
-} from '../src/ingress/not-connected.ts'
+} from '../src/ingress/messages.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind } from '../src/sources/github.ts'
@@ -400,49 +388,16 @@ describe('message ingress as it stands', () => {
       .toEqual({ allow: false, reason: 'source_mismatch' })
   })
 
-  it('unimplemented: ingress operations throw IngressNotConnected', () => {
-    const reply: IngressReply = {
-      channelKind: 'feishu', channelId: 'bot-home', text: 'done',
-      conversation: { scope: 'dm', externalConversationId: 'oc_ada', memberExternalId: 'ou_ada' },
-    }
-    expect(() => triggerFromInbound(dmMessage())).toThrow(IngressNotConnected)
-    expect(() => routeReply({ trigger: dmTrigger(), text: 'done' })).toThrow(IngressNotConnected)
-    expect(() => bindingFor([], { kind: 'feishu', id: 'bot-home' }, 'ou_ada')).toThrow(IngressNotConnected)
-    expect(() => messagesFor([], { kind: 'feishu', id: 'bot-home' })).toThrow(IngressNotConnected)
-    expect(() => pushToMember(push())).toThrow(IngressNotConnected)
-    expect(() => triggerFromGateway({
-      channel_id: 'bot-home', channel_type: 'feishu',
-      channel_subject: { subject_id: 'ou_ada', chat_type: 'p2p' }, content: [{ type: 'text', text: 'hi' }],
-    })).toThrow(IngressNotConnected)
-    expect(() => gatewayEventFromReply(reply)).toThrow(IngressNotConnected)
-  })
-
-  it('unimplemented: the ingress stub is not wired into plugin entrypoints or package exports', () => {
-    expect(readdirSync(join(ROOT, 'src/ingress'))).toEqual(['not-connected.ts'])
-    const entrypoints = ['src/index.ts', 'src/app/runtime.ts', 'src/sources/github.ts', 'src/sources/feishu.ts', 'src/client/index.tsx']
-    for (const file of entrypoints) {
-      const text = read(file)
-      expect(text, file).not.toMatch(/from ['"][^'"]*(?:\/family|\/ingress)/)
-      expect(text, file).not.toContain('octop-gateway')
-      expect(text, file).not.toContain('not-connected')
-    }
-    for (const file of ['cordis.patch.yml', 'tsdown.config.ts', 'package.json']) {
-      const text = read(file)
-      expect(text, file).not.toContain('ingress')
-      expect(text, file).not.toContain('octop-gateway')
-      expect(text, file).not.toMatch(/weixin|wechat|ilink/)
-    }
-    const pkg = JSON.parse(read('package.json')) as { exports: Record<string, unknown> }
-    expect(Object.keys(pkg.exports).sort()).toEqual(['.', './client', './feishu-watch', './github-watch', './locale/*.json', './package.json'])
-  })
-
-  it('unimplemented: no WeChat, WeChat Claw, or iLink Source is registered', () => {
+  it('registers the actual Weixin Source with a default-deny private scope', () => {
     const registry = new SourceRegistry(() => SettingsSchema.parse({}))
-    registry.register(githubKind)
-    registry.register(feishuKind)
-    for (const kind of ['weixin', 'wechat', 'wechat-claw', 'ilink']) expect(registry.kind(kind), kind).toBeUndefined()
-    expect(registry.kind('github')).toBe(githubKind)
-    expect(registry.kind('feishu')).toBe(feishuKind)
+    const kind = createWeixinKind(() => { throw new Error('No host in this mapping test') })
+    registry.register(kind)
+    expect(registry.kind('weixin')).toBe(kind)
+    expect(registry.scope({ source: 'weixin', meta: { scope: 'group' } }).listened).toBe(false)
+    const pkg = JSON.parse(read('package.json')) as { exports: Record<string, string> }
+    expect(pkg.exports['./weixin-watch']).toBe('./lib/weixin-watch.js')
+    expect(read('cordis.patch.yml')).toContain('dsh-superagent/weixin-watch')
+    expect(read('tsdown.config.ts')).toContain('src/sources/weixin.ts')
   })
 
   it('unimplemented: octop-gateway is not a runtime dependency', () => {

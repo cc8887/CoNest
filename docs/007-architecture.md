@@ -283,7 +283,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 - Executor tools bind reported pull requests with `readPull` and `claimPull`, using the GitHub context exposed by Runtime.
 - MasterAssessor reads repository files with `readRepositoryPath`.
 - Sessions and Prompts register built-in skills only for GitHub and Feishu. Migration converts their schema-10 records.
-- Setup probes only GitHub and Feishu account fields (`SETUP_FIELDS`). Only those Sources receive account setup problems through `SourceContext.problem`.
+- Setup probes enabled GitHub and Feishu CLIs and validates private Weixin account files when settings change (`SETUP_FIELDS`). Explicitly disabling GitHub skips its account/repository requirement; GitHub commands then refuse to fall back to ambient credentials.
 
 
 ## Modules
@@ -399,9 +399,20 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/family/domain.ts` | CoNest records only: `Member`, `IdentityBinding`, `ConversationScope`, `TaskAccess`, `MemoryGrant`, `AttentionTarget`, and `emptyDirectory`. Not a Ticket store, and not imported by the plugin |
 | `src/family/authorize.ts` | Pure default-deny `authorize` for those records. The Runtime does not call it |
 | `src/family/index.ts` | Re-exports of that unwired family module |
-| `src/ingress/not-connected.ts` | TDD stub for message-stream ingress: unified inbound message, reply route, per-instance isolation, proactive DM push, and a gateway-shaped sidecar mapping. Every operation throws `IngressNotConnected`. Not imported by the plugin, not registered as a Source, and not an Octop runtime |
+| `src/ingress/messages.ts` | Channel-instance message normalization, unique identity lookup, exact private reply routing and gateway-shaped mappings; group output remains denied |
+| `src/sources/weixin-api.ts` | Shared real iLink QR/PIN, poll and text-send transport for M0 and the registered Weixin Source |
+| `src/sources/weixin-account.ts` | Private host credential-file validation and exact account/owner matching |
+| `src/sources/weixin.ts` | Single-owner Weixin Source: atomic Engine intake/cursor, original-DM outbox delivery and durable uncertain-send guards |
+| `src/app/weixin-setup.ts` | Initializes a fresh single-owner Store with GitHub/Feishu disabled, explicit Weixin admission and one worker; refuses existing databases |
+| `src/weixin-setup.ts` | Executable wrapper for the fresh Weixin Runtime setup command |
+| `src/m0/cli.ts` | Opt-in M0 commands for real model, QR login, private-message transport, local status and machine diagnostics; separate from the SuperAgent plugin |
+| `src/m0/dsh.ts` | Real DSH Agent Loop with the pi-ai OpenAI adapter, JSONL persistence and one harmless probe tool; fresh Session per input |
+| `src/m0/weixin.ts` | Compatibility re-export of the shared iLink transport in `src/sources/weixin-api.ts` |
+| `src/m0/login.ts` | Loopback QR/PIN page and bounded login state machine; credentials stay in the host |
+| `src/m0/state.ts` | Private M0 transport journal for accounts, cursors and delivery states; contains no Tickets |
+| `src/m0/bridge.ts` | Owner-DM polling, serial DSH processing and delivery to the original private conversation |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled. `src/ingress/not-connected.ts` is not one of those entries. The Runtime does not import it, and the bundle does not register it.
+`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/weixin.ts` are Source plugin entries, built and exported as `./github-watch`, `./feishu-watch` and `./weixin-watch`. The bundle inserts the main plugin and all three Sources, with Feishu and Weixin disabled by default. Weixin imports the real mappings from `src/ingress/messages.ts`; the throwing ingress stub has been removed.
 
 ## Tests
 
@@ -449,7 +460,12 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
 | `tests/family-authorization.spec.ts` | Default-deny decisions of `authorize` in `src/family/authorize.ts`. It does not boot the Engine or the Store |
-| `tests/message-ingress.spec.ts` | Message-stream ingress contracts (normalization, same-conversation reply, channel isolation, proactive DM push, gateway sidecar shape) plus the gaps that already hold: group membership stays `group_membership_unmodeled`, the stub is not wired, and WeChat / iLink are not registered. Cases named `contract:` call the stub and fail until ingress is connected. No model API key |
+| `tests/message-ingress.spec.ts` | Real ingress contracts: normalization, original-conversation reply, channel isolation, authorized DM push, gateway mapping, group refusal and default-disabled Weixin Source registration. No model API key |
+| `tests/m0.spec.ts` | M0 HTTP, owner/account isolation, durable deduplication and delivery recovery through public transport/journal interfaces; no live accounts or model keys |
+| `tests/m0-dsh.spec.ts` | Actual DSH loop and pi-ai adapter against a local SSE server: fragmented tool call, result round trip, Session isolation, cancellation and provider errors; no external calls |
+| `tests/weixin-runtime.spec.ts` | Main Runtime startup without GitHub, real Ticket/Attention/result flow through Weixin and the existing outbox, deduplication and stranger/group refusal |
+| `tests/container.spec.ts` | Private container profile setup, retained operator edits, state-path and model-endpoint guards |
+| `tests/m0-login.spec.ts` | Real QR listener capability and Host checks on loopback and explicit container listeners |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
 

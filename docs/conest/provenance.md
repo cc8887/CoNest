@@ -53,4 +53,6 @@ git merge upstream/main
 
 ## 相对上游的行为修改
 
-家庭模块没有接入运行时。除 README、文档表、`.gitignore` 和持续集成外，上游逻辑只改了一处：`src/sources/feishu-loops.ts` 读取事件时，stderr 的 `[event] ready` 与 stdout 的事件行不在同一条管道上。在本环境的 Node.js 22.23.4 上，畸形 JSON 会先记成 `error`，随后才到达的 ready 又把健康状态写回 `ready`，于是 `tests/sources.spec.ts` 里“畸形行报错且不停止”稳定失败（当时 1203 通过、1 失败）。现在，本进程里已经报告过的解析错误不会被稍后的 ready 盖掉。这只为让导入的测试表达它原来的断言，不是家庭隔离，也没有新增渠道。
+家庭模块没有接入运行时。最初初始化时，除 README、文档表、`.gitignore` 和持续集成外，上游逻辑只改了一处：`src/sources/feishu-loops.ts` 读取事件时，stderr 的 `[event] ready` 与 stdout 的事件行不在同一条管道上。在 Node.js 22.23.4 上，畸形 JSON 会先记成 `error`，随后到达的 ready 又把健康状态写回 `ready`，使对应测试稳定失败。修复后，解析错误不会被迟到的 ready 盖掉。
+
+后续新增 M0 真实 DSH/微信连接探针、单 owner 微信 Source、通用 ingress 映射、主 Runtime 的 GitHub 可选启动和私聊初始化命令。未新增第二套工单状态机；家庭模块仍未接入。现场使用私有目录安装的 DSH CLI `0.2.1-alpha.2`，未安装全局 CLI。当前部署步骤见[微信主 Runtime](weixin-runtime.md)。

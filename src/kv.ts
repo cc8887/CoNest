@@ -38,6 +38,10 @@ export const KV = {
     prompts: record<number | null>('prompt-notification'), settings: record<number | null>('settings-notification') },
   /** Per-Source resolved display names mapping a named ID (such as a Feishu chat ID) to its display name. */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
+  /** Weixin Source: host-only transport cursors, reply credentials and external send receipts. Never added to Trigger metadata. */
+  weixin: { cursor: family<string, [account: string]>('weixin-cursor:'),
+    context: family<string, [account: string, peer: string]>('weixin-context:', (...parts) => JSON.stringify(parts)),
+    delivery: family<'sending' | 'uncertain' | 'sent'>('weixin-delivery:') },
   /**
    * GitHub Source: notification cursor and pending retries; per-Issue/PR read cursor shared by notification and polled reads;
    * per-stream cursor, start times by kind, and ETag; default-branch CI state; and per-PR CI fingerprint and revision (`revision`

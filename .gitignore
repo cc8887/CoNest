@@ -29,3 +29,6 @@ credentials.json
 *.pem
 id_rsa
 id_ed25519
+secrets/
+model-test.env
+weixin-account.json

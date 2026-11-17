@@ -36,6 +36,8 @@ export const USER_ERRORS = {
   noChannel: ['refused', 'No reply channel for this ticket or trigger'],
   panelOnlyEnvironment: ['refused', 'The execution environment (ticket directory, prepare command, blocked commands) can only be changed in the management panel'],
   panelOnlyAccounts: ['refused', 'Source fields that setup reads, such as account CLIs, can only be changed in the management panel'],
+  weixinRebind: ['refused', 'Use a fresh state directory to change the bound Weixin account or owner; existing Sessions retain private history'],
+  weixinCredentials: ['refused', 'Weixin credentials must be a private file matching the configured account and owner'],
   setupComplete: ['refused', 'Setup is complete'],
   modelUnavailable: ['refused', 'The {block} model is not available: {error}'],
   promptTooLong: ['refused', 'Prompt configuration exceeds {limit} characters'],

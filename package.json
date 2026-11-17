@@ -16,6 +16,7 @@
     "./client": "./lib/client.js",
     "./github-watch": "./lib/github-watch.js",
     "./feishu-watch": "./lib/feishu-watch.js",
+    "./weixin-watch": "./lib/weixin-watch.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
@@ -45,6 +46,8 @@
     "manifestVersion": 1
   },
   "scripts": {
+    "m0": "node lib/m0.js",
+    "weixin:setup": "node lib/weixin-setup.js",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -120,6 +123,12 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-alpha.2",
     "react-dom": "18.3.1",
     "@types/react-dom": "18.3.7",
-    "@deepseek-ai/dsh-subprocess": "0.2.1-alpha.2"
+    "@deepseek-ai/dsh-subprocess": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-alpha.2",
+    "@types/qrcode": "1.5.6",
+    "qrcode": "1.5.4"
   }
 }

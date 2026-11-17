@@ -1,0 +1,6 @@
+# Single root package. These optional SDKs are not used by the OpenAI text route.
+# Explicitly skip their install hooks; do not enable all transitive builds.
+allowBuilds:
+  '@google/genai': false
+  koffi: false
+  protobufjs: false
