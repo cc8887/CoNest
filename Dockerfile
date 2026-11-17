@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 FROM base AS build
 WORKDIR /opt/conest
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 RUN npm install --global --ignore-scripts --no-audit --no-fund pnpm@11.7.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
