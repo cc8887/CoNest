@@ -3,3 +3,29 @@ lib/
 .artifacts/
 .env
 coverage/
+
+# CoNest: secrets and local agent state stay out of this repository.
+# dsh-superagent keeps its database under the DSH profile stateDir
+# (docs/006-deployment.md), which should not be placed inside this checkout.
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+orchestrator.sqlite*
+.dsh/
+worker-bin/
+worker-gitconfig/
+.lark-cli-dsh-superagent/
+gh-agent/
+auth.json
+credentials.json
+*.pem
+id_rsa
+id_ed25519
