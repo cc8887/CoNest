@@ -86,7 +86,7 @@ try {
     if (!existsSync(join(data, 'runtime/orchestrator.sqlite'))) throw new Error('Bind with m0 login, then run init before starting the Runtime')
     ensureProfile()
     const env = modelEnv()
-    try { await child(process.execPath, [dsh, '--profile', 'conest', '--no-open', ...args]) } finally { env.dispose() }
+    try { await child(process.execPath, [dsh, '--profile', 'conest', ...args, '--no-open']) } finally { env.dispose() }
   } else throw new Error('Unknown container command; use help')
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Container command failed')
