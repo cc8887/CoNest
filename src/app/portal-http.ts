@@ -31,6 +31,10 @@ function failure(res: ServerResponse, error: unknown): void {
   respond(res, status, { error: error instanceof PortalError ? error.message : status === 400 ? '请检查填写内容' : '操作未完成，请稍后重试' })
 }
 const idFrom = (value: string | undefined) => { if (!value || !safeId.test(value)) throw new PortalError(404, '页面不存在'); return value }
+/** Render the operator shell after the caller has authenticated the DSH browser session. */
+export function registrationPage(res: ServerResponse, head = false): void {
+  respond(res, 200, head ? '' : html('admin'), 'text/html; charset=utf-8')
+}
 const cookieName = (id: string) => `conest_${id}`
 function cookie(req: IncomingMessage, id: string): string | undefined {
   const matches = (req.headers.cookie ?? '').split(';').map(item => item.trim()).filter(item => item.startsWith(cookieName(id) + '='))
@@ -49,7 +53,7 @@ export async function registrationHttp(req: IncomingMessage, res: ServerResponse
     const url = new URL(req.url ?? '/', 'http://localhost'), path = url.pathname.slice(PORTAL_ADMIN_PATH.length)
     if (req.headers.host !== expectedHost || req.headers.origin && req.headers.origin !== `http://${expectedHost}`)
       throw new PortalError(403, '不允许跨站管理操作')
-    if (req.method === 'GET' && (path === '' || path === '/')) { respond(res, 200, html('admin'), 'text/html; charset=utf-8'); return }
+    if (req.method === 'GET' && (path === '' || path === '/')) { registrationPage(res); return }
     if (req.method === 'GET' && path === '/assets/portal.js') { respond(res, 200, script(), 'application/javascript; charset=utf-8'); return }
     if (req.headers['x-orchestrator-request'] !== '1') throw new PortalError(403, '请从管理页面发起操作')
     const pieces = path.split('/').filter(Boolean), method = req.method

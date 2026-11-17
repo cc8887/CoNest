@@ -41,4 +41,4 @@
 
 - 网页收尾复测曾有一次原生 mock 回执关联断言 `0 !== 1`，失败日志为忽略目录 `.artifacts/portal-native-final.log`；当时未保留临时状态，不能把后续通过当作已定位根因。补充了错误堆栈和每工单回执断言；随后连续 7 轮 10 租户/100 工单通过（包括两个带 37ms 调度扰动的原生进程）。另修正 mock SSE response id 在异步处理中读取全局计数可能重复的问题，固定为请求自己的序号；尚未证明该问题导致之前断言。此待复现项需在后续发布验收继续跟进，不宣称已修复生产回执缺陷。模拟进程和私有临时状态已清理，保留脱敏日志、报告与页面截图。
 
-- 发布 v0.2.0-alpha.1 期间用户要求默认启动进入自己的 CoNest 后台，不能先显示 DSH 首页。`src/app/http.ts` 为 `/` 注册精确入口，在 DSH Connection.authorizeIndex 完成 launch-token 兑换/签名 Cookie 检查后跳转 `/orchestrator/registration/`；路由在 Runtime 首次 await 前安装，避免启动浏览器时落入 DSH fallback。原 DSH 管理页面保留在 `/index.html`，CoNest 侧栏“高级控制台”可打开，认证保持不变。网页与发布验收均须检查默认跳转和高级入口。
+- 发布 v0.2.0-alpha.1 期间用户要求默认启动进入自己的 CoNest 后台，不能先显示 DSH 首页。`src/app/http.ts` 为 `/` 注册精确入口，在 DSH Connection.authorizeIndex 完成 launch-token 兑换/签名 Cookie 检查后直接在根地址呈现后台（`/orchestrator/registration/` 仍可访问）；路由在 Runtime 首次 await 前安装，避免启动浏览器时落入 DSH fallback。原 DSH 管理页面保留在 `/index.html`，CoNest 侧栏“高级控制台”可打开，认证保持不变。网页与发布验收均须检查默认页面和高级入口。

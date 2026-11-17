@@ -176,8 +176,8 @@ async function start() {
       operatorCookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
       if (!operatorCookie) return false
       const landing = await fetch(`${origin}/`, { headers: { cookie: operatorCookie }, redirect: 'manual' })
-      assert.equal(landing.status, 303, 'The default launch did not open the CoNest backend')
-      assert.equal(landing.headers.get('location'), '/orchestrator/registration/')
+      assert.equal(landing.status, 200, 'The default launch did not open the CoNest backend')
+      assert((await landing.text()).includes('<title>CoNest ·'), 'The default launch served a different interface')
       const consolePage = await fetch(`${origin}/index.html`, { headers: { cookie: operatorCookie } })
       assert.equal(consolePage.status, 200, 'The authenticated advanced DSH console is unavailable')
     }

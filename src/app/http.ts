@@ -27,7 +27,7 @@ import { settingsView } from './views/settings.ts'
 import { sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
-import { PORTAL_ADMIN_PATH, registrationHttp } from './portal-http.ts'
+import { PORTAL_ADMIN_PATH, registrationHttp, registrationPage } from './portal-http.ts'
 import type { Portal } from './portal.ts'
 
 export interface HttpHost {
@@ -245,7 +245,7 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
       if (!connection?.authorizeIndex) { json(res, 503, { error: '后台管理登录尚未就绪' }); return }
       // Preserve DSH's launch-token exchange and signed browser cookie before selecting the product landing page.
       if (!connection.authorizeIndex(req, res)) return
-      res.writeHead(303, { location: PORTAL_ADMIN_PATH + '/', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end()
+      registrationPage(res, req.method === 'HEAD')
     } })] : [],
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')

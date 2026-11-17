@@ -22,15 +22,15 @@ it('authenticates the launch URL before opening the CoNest backend and rejects u
   registerHttp(ctx as never, { registration: {} } as HttpHost)
   expect(landing).toBeTypeOf('function')
   async function call(url = '/', headers: Headers = {}, method = 'GET') {
-    let status = 0, response: Headers = {}
+    let status = 0, response: Headers = {}, body = ''
     await landing!({ method, url, headers: { host: '127.0.0.1:3082', ...headers } },
-      { writeHead: (value: number, fields: Headers = {}) => { status = value; response = fields }, end: () => {} })
-    return { status, headers: response }
+      { writeHead: (value: number, fields: Headers = {}) => { status = value; response = fields }, end: (text = '') => { body = text } })
+    return { status, headers: response, body }
   }
   expect(await call('/?token=fixture-launch')).toMatchObject({ status: 303, headers: { location: './', 'set-cookie': 'operator=fixture; HttpOnly' } })
   expect(await call()).toMatchObject({ status: 401 })
-  expect(await call('/', { cookie: 'operator=fixture' })).toMatchObject({ status: 303, headers: { location: '/orchestrator/registration/' } })
-  expect(await call('/', { cookie: 'operator=fixture' }, 'HEAD')).toMatchObject({ status: 303 })
+  expect(await call('/', { cookie: 'operator=fixture' })).toMatchObject({ status: 200, body: expect.stringContaining('<title>CoNest ·') })
+  expect(await call('/', { cookie: 'operator=fixture' }, 'HEAD')).toMatchObject({ status: 200, body: '' })
   expect(await call('/', { cookie: 'operator=fixture' }, 'POST')).toMatchObject({ status: 405 })
   expect(await call('/', { host: 'evil.example:3082', cookie: 'operator=fixture' })).toMatchObject({ status: 403 })
   expect(await call('/', { origin: 'https://evil.example', cookie: 'operator=fixture' })).toMatchObject({ status: 403 })
