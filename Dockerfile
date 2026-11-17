@@ -18,6 +18,7 @@ FROM base AS dsh
 WORKDIR /opt/dsh
 COPY containers/dsh/package.json containers/dsh/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
+RUN node -e 'try { require("node-addon-require-builtin").getBindingInfo() } catch (error) { console.dir(error, { depth: 8 }); process.exit(1) }'
 
 FROM base AS runtime
 ARG VERSION=development
