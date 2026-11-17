@@ -1,6 +1,6 @@
 # 微信主 Runtime 部署与验证
 
-日期：2026-11-17。当前开发代码支持多个显式绑定成员的文本私聊，成员各有私有路由 Session，复用同一 SuperAgent Store、Engine、Ticket、Attention、effects、outbox 和 worker 队列。可以禁用 GitHub。`v0.1.0-m0.1` 发布附件仍为旧单 owner 版本，以下成员功能需使用本次源码构建。
+日期：2026-11-17。当前开发代码支持多个显式绑定成员的文本私聊，成员各有私有路由 Session，复用同一 SuperAgent Store、Engine、Ticket、Attention、effects、outbox 和 worker 队列。可以禁用 GitHub。`v0.2.0-alpha.1` Release 已包含成员与个人网页；`v0.1.0-m0.1` 发布附件仍为旧单 owner 版本。以下为源码部署流程，容器可按对应 Release 的 DOCKER.md 部署。
 
 ## 准备源码与私有状态
 
@@ -135,6 +135,8 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 - 权限预设仍为上游的 `danger-full-access`，没有 OS 沙箱。成员模式由宿主限制为工单工具并检查范围；不提供任意 shell、文件或子 Agent 执行。成员记忆共享、工单共享与群授权仍为后续能力。
 
 ## 验证记录
+
+`v0.2.0-alpha.1` 已在 [GitHub Release](https://github.com/cc8887/CoNest/releases/tag/v0.2.0-alpha.1) 发布。源码/镜像 revision 为 `a57f3747cc11804318e581966b7c30d2a8525f60`；Linux CI 通过 1268 项测试、类型检查和构建，镜像通过非 root、只读根/noexec、默认后台与高级入口、认证、个人界面、重启，以及隔绝外网的 10 租户/100 工单/210 次 mock 回传。附件 VALIDATION.json 给出工单与回执核对结果；全部 SHA256SUMS 条目与 GitHub 服务端摘要一致。这不替代真实微信多账号、N100 容量或 Windows/WSL 常驻验收。
 
 当前完整检查结果见项目记忆；网页接口回归另覆盖 PIN、过期二维码刷新、停用后登录失效、跨租户操作拒绝和未完成扫码恢复。早期单 owner 基线为 1251 项通过。主 Runtime 集成测试覆盖无 GitHub 启动、真实 Engine 建单、追问/续接/完成、原私聊 outbox、去重、游标事务回滚、旧消息重放和绑定修改保护。
 
