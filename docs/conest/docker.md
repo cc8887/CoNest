@@ -1,6 +1,6 @@
 # CoNest Docker 验证版
 
-`v0.2.0-alpha.1` 面向 N100 的 `linux/amd64`，提供每位成员独立租户的网页注册、微信扫码绑定、个人任务页面与共享工单队列。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主无需安装 Node 或 pnpm。它是预发布版，N100 真机与多个真实微信账号仍待现场验收。旧 `v0.1.0-m0.1` 只支持一位 owner。
+`v0.2.0-alpha.2` 面向 N100 的 `linux/amd64`，提供每位成员独立租户的网页注册、微信扫码绑定、个人任务页面、共享工单队列和可在工单执行期间继续对话的微信前台。前台默认使用 `hy4-flash`，后台共享一个 `hy4` worker。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主无需安装 Node 或 pnpm。它是预发布版，N100 真机与多个真实微信账号仍待现场验收。旧 `v0.1.0-m0.1` 只支持一位 owner。
 
 ## 下载与启动
 
@@ -8,7 +8,7 @@
 
 ```bash
 sha256sum --check SHA256SUMS
-docker load --input conest-0.2.0-alpha.1-linux-amd64.docker.tar.gz
+docker load --input conest-0.2.0-alpha.2-linux-amd64.docker.tar.gz
 mkdir -p secrets
 cp model-test.env.example secrets/model-test.env
 chmod 700 secrets
@@ -63,8 +63,8 @@ Compose 使用非 root UID 1000、只读根文件系统、noexec 临时目录、
 ## 本地构建与验收
 
 ```bash
-docker build --platform linux/amd64 --build-arg VERSION=0.2.0-alpha.1 -t conest:0.2.0-alpha.1 .
-bash scripts/docker-smoke.sh conest:0.2.0-alpha.1
+docker build --platform linux/amd64 --build-arg VERSION=0.2.0-alpha.2 -t conest:0.2.0-alpha.2 .
+bash scripts/docker-smoke.sh conest:0.2.0-alpha.2
 ```
 
 构建执行完整 `pnpm check`。smoke 检查镜像架构、非 root、原生加载器、空目录网页注册启动、DSH 签名登录、个人界面、未授权拒绝和重启。当前源码的离线镜像测试用真实 DSH 与 mock 模型/iLink 跑 10 租户和 100 工单，检查 210 次工单回传及 worker 运行期间的 3 条前台回复。

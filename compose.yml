@@ -1,6 +1,6 @@
 services:
   conest:
-    image: conest:0.2.0-alpha.1
+    image: conest:0.2.0-alpha.2
     restart: unless-stopped
     network_mode: host
     env_file:
