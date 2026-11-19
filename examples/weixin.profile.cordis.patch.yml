@@ -16,6 +16,9 @@
         baseURL: https://copilot.tencent.com/v2/
         apiKeyEnv: CONEST_TEST_API_KEY
         models:
+          - id: hy4-flash
+            input: [text]
+            maxTokens: 16384
           - id: hy4
             input: [text]
             maxTokens: 16384

@@ -47,7 +47,7 @@ if (!webEnrollment) writeFileSync(directoryFile, JSON.stringify({ members: users
   }) }))
 const requests = [], calls = [], routed = new Set(), replied = new Set()
 const questionTickets = new Map(), holds = new Set()
-let holdWorkers = true, attemptedForeignRead = false, modelError
+let holdWorkers = true, heldMember, attemptedForeignRead = false, modelError
 let processHandle, processExit, runtimeLog = '', origin, token, operatorCookie = ''
 const textOf = value => typeof value === 'string' ? value : (value ?? []).filter(block => block.type === 'text').map(block => block.text).join('')
 const question = member => `MOCK_QUESTION_${member}：请确认清单格式。`
@@ -57,7 +57,8 @@ const model = createServer(async (req, res) => {
     assert.equal(req.url, '/v2/chat/completions')
     const body = await readModelRequest(req)
     assert.equal(body.stream, true)
-    assert.equal(body.model, 'hy4')
+    const isWorker = body.tools?.some(item => item.function?.name === 'orchestrator_report')
+    assert.equal(body.model, isWorker ? 'hy4' : 'hy4-flash')
     requests.push(body)
     const requestNumber = requests.length
     const jitter = Number(process.env.CONEST_MOCK_JITTER_MS || 0)
@@ -80,8 +81,10 @@ const model = createServer(async (req, res) => {
     })
     const last = messages.at(-1)
     let call
-    if (body.tools?.some(item => item.function?.name === 'orchestrator_report')) {
+    if (isWorker) {
+      assert(!content.includes('MOCK_CHAT_'), 'Foreground chat reached a worker')
       if (holdWorkers) {
+        heldMember = member
         res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders()
         await new Promise(resolve => { holds.add(resolve); res.once('close', () => { holds.delete(resolve); resolve() }) })
         if (res.destroyed) return
@@ -103,10 +106,18 @@ const model = createServer(async (req, res) => {
           call = { name: 'orchestrator_read', args: { resource: `ticket/${questionTickets.get(1)}`, offset: 0 } }
         } else {
           routed.add(pending.trigger_id)
-          const item = String(pending.text).includes('MOCK_ATTACK') ? { kind: 'ignore', trigger_id: pending.trigger_id, reason: 'Offline permission probe complete' }
-            : String(pending.text).includes('MOCK_FOLLOWUP') ? { kind: 'attach', trigger_id: pending.trigger_id, ticket_id: questionTickets.get(member) }
-            : { kind: 'accept', trigger_id: pending.trigger_id, title: `离线清单 ${member}`, worktree_name: 'offline-checklist', acknowledgement: `MOCK_ACK_${member}：已接单。` }
-          call = { name: 'orchestrator_route', args: { decisions: [item] } }
+          const chat = String(pending.text).match(/MOCK_CHAT_(\d+)/)
+          if (chat) {
+            assert(content.includes('## Private member assistant'))
+            const turn = Number(chat[1])
+            if (turn > 1) assert(content.includes(`MOCK_CHAT_${turn - 1}`), 'The router lost the preceding chat turn')
+            call = { name: 'orchestrator_reply', args: { purpose: 'answer', trigger_id: pending.trigger_id, text: `MOCK_CHAT_REPLY_${turn}` } }
+          } else {
+            const item = String(pending.text).includes('MOCK_ATTACK') ? { kind: 'ignore', trigger_id: pending.trigger_id, reason: 'Offline permission probe complete' }
+              : String(pending.text).includes('MOCK_FOLLOWUP') ? { kind: 'attach', trigger_id: pending.trigger_id, ticket_id: questionTickets.get(member) }
+              : { kind: 'accept', trigger_id: pending.trigger_id, title: `离线清单 ${member}`, worktree_name: 'offline-checklist', acknowledgement: `MOCK_ACK_${member}：已接单。` }
+            call = { name: 'orchestrator_route', args: { decisions: [item] } }
+          }
         }
       } else if (report && (report.kind === 'worker_attention' || report.state === 'ready')) {
         replied.add(`${report.ticket.ticket_id}:${report.kind}:${report.state}`)
@@ -117,7 +128,7 @@ const model = createServer(async (req, res) => {
       }
     }
     if (!res.headersSent) res.writeHead(200, { 'content-type': 'text/event-stream' })
-    const emit = choice => res.write(`data: ${JSON.stringify({ id: `offline-${requestNumber}`, object: 'chat.completion.chunk', model: 'hy4',
+    const emit = choice => res.write(`data: ${JSON.stringify({ id: `offline-${requestNumber}`, object: 'chat.completion.chunk', model: body.model,
       created: 1, choices: [{ index: 0, ...choice }] })}\n\n`)
     if (call) {
       calls.push(call)
@@ -244,6 +255,18 @@ try {
   assert.deepEqual(new Set(pending.items.map(item => item.id)), new Set(original.items.map(item => item.id)))
   await until(async () => (await api('state')).load.running === 1, 'first worker after restart')
   assert.deepEqual((await api('state')).load, { running: 1, queued: 99, maxWorkers: 1 })
+  await until(() => holds.size === 1, 'worker model stream held open after restart')
+  const chattingMember = heldMember
+  const chatPrompts = ['你好，今天有点想聊天。', '西瓜和蜜瓜，夏天你更喜欢哪个？', '你刚才推荐的是哪一个？']
+  for (const [index, text] of chatPrompts.entries()) {
+    const turn = index + 1
+    publish(`chat-${turn}`, member => member === chattingMember ? [message(member, `chat-${turn}`, `MOCK_PRIVATE_${member} MOCK_CHAT_${turn}：${text}`)] : [])
+    const reply = await until(() => sent().find(item => item.text === `MOCK_CHAT_REPLY_${turn}`), `foreground chat turn ${turn}`)
+    assert.equal(reply.account, accounts[chattingMember].id)
+    assert.equal(holds.size, 1, 'The worker finished before the chat reply')
+    assert.deepEqual((await api('state')).load, { running: 1, queued: 99, maxWorkers: 1 })
+  }
+  console.log('Three same-account chat replies delivered on hy4-flash while the hy4 worker stayed busy')
   holdWorkers = false; for (const release of holds) release(); holds.clear()
   await until(() => sent().filter(item => item.text.startsWith('MOCK_QUESTION_')).length === 10
     && sent().filter(item => item.text.startsWith('MOCK_RESULT_')).length === 90, 'ten private questions and ninety direct results')
@@ -270,10 +293,11 @@ try {
   for (const delivery of sent()) {
     const member = Number(delivery.account.replace('mock-bot-', ''))
     assert.equal(delivery.peer, users[member]); assert.equal(delivery.context, `context-${users[member]}`)
-    assert(delivery.text.startsWith(`MOCK_ACK_${member}`) || delivery.text.startsWith(`MOCK_QUESTION_${member}`) || delivery.text.startsWith(`MOCK_RESULT_${member}_`), 'Crossed member result')
+    assert(delivery.text.startsWith(`MOCK_ACK_${member}`) || delivery.text.startsWith(`MOCK_QUESTION_${member}`) || delivery.text.startsWith(`MOCK_RESULT_${member}_`)
+      || (member === chattingMember && delivery.text.startsWith('MOCK_CHAT_REPLY_')), 'Crossed member result')
   }
   const deliveries = sent().length
-  assert.equal(deliveries, 210)
+  assert.equal(deliveries, 210 + chatPrompts.length)
   await stop(); await start()
   const restored = await api('tickets?state=ended&limit=1000')
   assert.equal(restored.items.length, 100)
@@ -309,6 +333,7 @@ try {
     admittedUsers: users.length, privateRouters: new Set(routers).size, tickets: tickets.items.length,
     queuedRestart: { running: 1, queued: 99, maxWorkers: 1 }, foreignRead: 'rejected by real DSH tool execution',
     privateModelContexts: 'one member per request; checked on every model call', attentionFollowupResult: '10 passed',
+    foregroundChat: { turns: chatPrompts.length, routerModel: 'hy4-flash', workerModel: 'hy4', extraTickets: 0 },
     replayAndCompletedRestart: 'passed', reportToOriginAndReceipt: '100 matched', deliveries, modelRequests: requests.length, toolCalls: calls.length,
     multiuserAcceptance: 'PASSED: 10 members, 100 Tickets, one shared queue, private contexts and original-account result delivery' }
   const output = resolve(process.env.CONEST_MOCK_REPORT || join(repo, '.artifacts/mock-runtime-report.json'))

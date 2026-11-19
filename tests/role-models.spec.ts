@@ -4,7 +4,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { agentEvents, installModelSelection, type Agent, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import { initializeRoleModel } from '../src/app/role-models.ts'
+import { bindRouterModel, initializeRoleModel } from '../src/app/role-models.ts'
 const contexts: Context[] = []
 afterEach(async () => { await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose())); vi.restoreAllMocks() })
 async function fixture() {
@@ -53,6 +53,18 @@ it.each(['header', 'selection'])('preserves a resumed Session with existing %s',
   else agent.session.append('model/selection', existing)
   await initializeRoleModel(ctx, agent, { provider: 'worker', model: 'new' })
   expect(resolve).not.toHaveBeenCalled()
+})
+it('uses the configured model for the next step of an existing private router', async () => {
+  const { ctx, agent, request, record } = await fixture()
+  record({ provider: 'conest', model: 'hy4', reasoningEffort: ReasoningEffortId('high') })
+  let configured = { provider: 'conest', model: 'hy4-flash' }
+  bindRouterModel(ctx, agent, () => configured)
+  expect((await ctx.systemPrompt.assemble()).variables).toMatchObject(configured)
+  const first = configured
+  configured = { provider: 'conest', model: 'hy4' }
+  expect(await request()).toEqual(first)
+  await ctx.systemPrompt.assemble()
+  expect(await request()).toEqual(configured)
 })
 it('inherits the host when unset and fails unavailable routes before recording a selection', async () => {
   const { ctx, agent, resolve, request } = await fixture()

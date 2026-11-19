@@ -19,7 +19,7 @@ const RoutingNoteSchema = z.string().trim()
   .describe(`Optional routing background or explicit human constraint, at most ${NOTE_WORDS} words. Never add implementation instructions or replace the original source.`)
 export interface MainToolsHost {
   readonly context: Context
-  readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
+  readonly engine: Pick<EngineForMainSession, 'candidate' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
   readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings'>
   readonly prompts: Pick<Prompts, 'preview' | 'save'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
@@ -152,7 +152,7 @@ function routeTool(host: MainToolsHost): Tool {
   })
 }
 /** Builds the main Session's tools; `agent` scopes prompt preview resources to that Session. */
-export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
+export function mainTools(host: MainToolsHost, agent: Agent, privateRouter = false): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
   return [
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
@@ -222,7 +222,8 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     }),
     tool({
       name: 'orchestrator_reply',
-      description: `Send an answer to a human question, a ready result, or attention requiring human action, as the replies section says; the gate refuses anything else, such as progress. purpose=result needs a ticket in person/review after a ready report, a completed or merged one, or a dropped one whose matched rule asks for a closing message. IM limit: ${IM_WORDS} words.`,
+      description: `Send an answer to a human question, a ready result, or attention requiring human action, as the replies section says; the gate refuses anything else, such as progress. purpose=result needs a ticket in person/review after a ready report, a completed or merged one, or a dropped one whose matched rule asks for a closing message. IM limit: ${IM_WORDS} words.`
+        + (privateRouter ? ' For a current private Weixin candidate, answer with its trigger_id and omit ticket_id. This replies directly and settles the candidate without opening a ticket.' : ''),
       schema: z.object({
         trigger_id: z.string().optional().describe('The original human question, for an answer only.'),
         ticket_id: z.string().optional(),
@@ -231,8 +232,17 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
         text: z.string().min(1).max(20000),
       }).strict(),
       execute: async args => {
-        const reply = host.engine.reply({ purpose: args.purpose, text: args.text, ...(args.trigger_id ? { triggerId: args.trigger_id } : {}),
-          ...(args.ticket_id ? { ticketId: args.ticket_id } : {}), ...(args.human_action ? { question: args.human_action } : {}) })
+        const reply = host.store.atomic(() => {
+          const id = args.trigger_id
+          if (privateRouter && args.purpose === 'answer' && id && !args.ticket_id && host.store.triggers.get(id)?.source === 'weixin') {
+            const candidate = host.engine.candidate(id)
+            if (candidate?.strength === 'explicit') {
+              host.engine.decide(id, { kind: 'ignore', evalId: candidate.evalId, reason: 'Answered directly in Weixin' })
+            }
+          }
+          return host.engine.reply({ purpose: args.purpose, text: args.text, ...(id ? { triggerId: id } : {}),
+            ...(args.ticket_id ? { ticketId: args.ticket_id } : {}), ...(args.human_action ? { question: args.human_action } : {}) })
+        })
         await host.sendReplies()
         return { status: host.store.replyStatus(reply.id) ?? reply.status }
       },

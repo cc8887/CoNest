@@ -142,6 +142,25 @@ it('rejects guessed foreign ticket/trigger/thread ids, cross-member routing and 
   expect(h!.runtime.store.tickets.get(ticketB)?.ended).toBeUndefined()
 })
 
+it('settles a private Weixin chat candidate and deduplicates its reply without creating a Ticket', async () => {
+  const f = await fixture(), account = f.accounts[0]!, chat = message(account, 'chat', '你喜欢西瓜吗？')
+  f.incoming.set(account.id, [chat])
+  const other = f.accounts[1]!
+  f.incoming.set(other.id, [message(other, 'other-chat')])
+  await f.poll()
+  const trigger = weixinTrigger(account, chat, true)!
+  expect(h!.runtime.engine.candidate(trigger.id)?.strength).toBe('explicit')
+  const answer = { purpose: 'answer', trigger_id: trigger.id, text: '夏天我会选冰西瓜。' }
+  await expect(h!.runTool(f.routers[1]!, 'orchestrator_reply', answer)).rejects.toThrow('inaccessible')
+  await h!.runTool(f.routers[0]!, 'orchestrator_reply', answer)
+  await h!.runTool(f.routers[0]!, 'orchestrator_reply', answer)
+  expect(h!.runtime.engine.candidate(trigger.id)).toBeUndefined()
+  expect(h!.runtime.store.tickets.list()).toHaveLength(0)
+  expect(f.sent).toHaveLength(1)
+  expect(f.sent[0]?.bot).toBe(account.id)
+  expect(f.sent[0]?.body.msg.item_list[0].text_item.text).toBe(answer.text)
+})
+
 it('keeps 100 member Tickets in one durable queue, restores router ownership and returns every result to its account', async () => {
   let f = await fixture()
   for (const account of f.accounts) f.incoming.set(account.id, Array.from({ length: 10 }, (_, index) => message(account, `task-${index}`)))
@@ -194,7 +213,12 @@ it('initializes a multi-member Store with pinned credentials and refuses disable
   writeFileSync(membersFile, JSON.stringify(f.config))
   initializeWeixinMembers({ stateDir, membersFile, provider: 'conest', model: 'hy4' })
   const store = new Store(join(stateDir, 'orchestrator.sqlite'))
-  try { expect(store.settings().sources.weixin?.config.members).toHaveLength(10); expect(store.settings().executor.maxWorkers).toBe(1) } finally { store.close() }
+  try {
+    const settings = store.settings()
+    expect(settings.sources.weixin?.config.members).toHaveLength(10)
+    expect(settings.eval.model).toMatchObject({ provider: 'conest', model: 'hy4-flash' })
+    expect(settings.executor).toMatchObject({ maxWorkers: 1, model: { provider: 'conest', model: 'hy4' } })
+  } finally { store.close() }
   f.incoming.set(f.accounts[0]!.id, [message(f.accounts[0]!, 'before-disable')]); await f.poll()
   const trigger = weixinTrigger(f.accounts[0]!, message(f.accounts[0]!, 'before-disable'), true)!
   const ticket = await f.route(0, trigger.id), deliveries = f.sent.length

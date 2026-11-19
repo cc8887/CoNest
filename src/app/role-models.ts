@@ -11,6 +11,34 @@ export async function resolveRoleModel(ctx: Context, model: RoleModel): Promise<
   return { provider: value.provider, model: value.model, ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}) }
 }
 
+/** Keep prompt variables and the request on the same selection, including retries of the assembled step. */
+function bindRoleModel(agent: Agent, select: () => ModelSelection | Promise<ModelSelection> | undefined): (() => void)[] {
+  let assembled: ModelSelection | undefined
+  return [
+    agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+      const selection = await select()
+      const result = await next()
+      assembled = selection
+      return selection ? { ...result, variables: { ...result.variables, provider: selection.provider, model: selection.model } } : result
+    }, { prepend: true }),
+    agent.ctx.on('agent/request', async (_payload, next) => {
+      const selection = assembled
+      const result = await next()
+      if (!selection) return result
+      const { reasoningEffort: _inherited, ...rest } = result
+      return { ...rest, ...selection }
+    }, { prepend: true }),
+  ]
+}
+
+/** Use the operator's current router setting on each new step, including in resumed private sessions. */
+export function bindRouterModel(ctx: Context, agent: Agent, model: () => RoleModel | null): (() => void)[] {
+  return bindRoleModel(agent, () => {
+    const configured = model()
+    return configured ? resolveRoleModel(ctx, configured) : undefined
+  })
+}
+
 /** Seed a role's configured model onto a brand-new session before its first request, leaving later manual or durable selections intact. */
 export async function initializeRoleModel(ctx: Context, agent: Agent, model: RoleModel | null): Promise<void> {
   if (!model) return
@@ -19,21 +47,9 @@ export async function initializeRoleModel(ctx: Context, agent: Agent, model: Rol
   // Avoid selectModel because it mutates the global DSH default; inject the selection for the initial request only.
   agent.session.append('model/selection', selected)
   let initial = true
-  let assembled: ModelSelection | undefined
   agent.ctx.effect(() => {
     const disposers = [
-      agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-        const selection = initial ? selected : undefined
-        const result = await next()
-        assembled = selection
-        return selection ? { ...result, variables: { ...result.variables, provider: selection.provider, model: selection.model } } : result
-      }, { prepend: true }),
-      agent.ctx.on('agent/request', async (_payload, next) => {
-        const result = await next()
-        if (!assembled) return result
-        const { reasoningEffort: _inherited, ...rest } = result
-        return { ...rest, ...assembled }
-      }, { prepend: true }),
+      ...bindRoleModel(agent, () => initial ? selected : undefined),
       ctx.on('session/event', (session, event) => {
         if (session === agent.session && (event.type === 'request/header' || event.type === 'model/selection')) initial = false
       }),

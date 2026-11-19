@@ -24,7 +24,13 @@ pnpm weixin:setup --web \
   --provider conest --model hy4
 ```
 
-该命令只接受新数据库，禁用 GitHub/飞书，配置 hy4、1 个 worker 和 600 秒评估超时。它不需要先扫码、导出凭证或填写成员 JSON。重新启动直接使用现有状态；已有旧单 owner 私聊历史需保留原目录，另建成员状态和 DSH profile。
+该命令只接受新数据库，禁用 GitHub/飞书。新成员模式默认用 `hy4-flash` 处理前台会话，用 `hy4` 运行后台工单。全平台共享 1 个 worker，评估超时为 600 秒。它不需要先扫码、导出凭证或填写成员 JSON。重新启动直接使用现有状态。旧单 owner 迁到成员模式时，需要另建成员状态和 DSH profile。
+
+## 微信前台对话与后台工单
+
+每位成员在微信里有一个持续保留上下文的私有前台会话。问候、闲聊和能当场回答的简单问题直接发回微信。明确委托工作或要求交付成果时，前台发送接单回执，并将工单交给独立 worker 会话。后台运行时，可以继续在同一个私聊里对话。前台回复无需占用 worker，工单结果仍回到原账号。
+
+既有成员部署可在 DSH profile 的供应商模型列表中补上 `hy4-flash`，重启后在 CoNest 后台的「评估 → 研判模型」选择它。在「执行」中确认执行器模型为 `hy4`、并行 worker 数为 1。已有私有前台会话会在下一次模型请求使用已保存的研判设置，并保留对话历史。新部署也可以用 `--router-model` 和 `--model` 分别指定前台和执行模型。
 
 ## 网页注册、扫码与个人空间
 
@@ -81,7 +87,7 @@ dsh plugin --profile conest add "link:$PWD"
 
 将[微信 profile 示例](../../examples/weixin.profile.cordis.patch.yml)复制为该 profile 的 `cordis.patch.yml`，将 `stateDir` 替换为初始化时的绝对路径。不要覆盖已有生产 profile。示例只有文本输入和 SuperAgent 工单工具；worker/router 的 `plugins: []` 不加载宿主 shell、文件或子 Agent 工具。完整 preset 配置必须保留 `id` 和 `name`。
 
-供应商使用 `openai-completions`、`hy4` 和环境变量 `CONEST_TEST_API_KEY`。DSH pi-ai 使用流式请求；接口不接受本次所测非流式请求。主 Runtime 的提示词和工具远多于 M0：4096 token 曾在调用建单工具前被耗尽，因此示例将输出上限设为 16384；初始化使用 600 秒评估期限，避免把较长的模型推理误判为 120 秒评估超时。输出额度是上限而非每次消耗保证，也不是完整的费用预算控制。原有部署需在管理面板的 eval 设置中调整超时，初始化命令不会覆盖它。
+供应商使用 `openai-completions`，示例声明 `hy4-flash` 和 `hy4`，凭证来自环境变量 `CONEST_TEST_API_KEY`。DSH pi-ai 使用流式请求。旧版主 Runtime 曾在 4096 token 上限内耗尽额度，因此示例将输出上限设为 16384，初始化使用 600 秒评估期限。既有部署的超时时间可在管理面板的评估设置中调整。
 
 在源码目录启动：
 
@@ -100,7 +106,7 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 
 验收需同时核对：原私聊已入站、模型调用 `orchestrator_route` 建单、独立 worker 调用 `orchestrator_report`、主 Session 调用 `orchestrator_reply`、outbox 标记发送，以及手机实际收到。worker 的报告先进入主 Session，不会绕过主 Session 直接发微信。停止使用 `Ctrl+C`，等待轮询取消和 Store 关闭后再迁移或启动其他实例。
 
-## 本地 mock 验收（2026-11-17）
+## 本地 mock 验收
 
 验收使用 10 位成员、总计 100 个未完成任务且允许排队。实现由成员目录驱动，不限定为双用户。
 
@@ -115,6 +121,7 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 | 网页创建 10 位成员并模拟扫码，各自独立租户 | 10 个稳定私有 router，100 个工单 | 同一部署中的通用多成员绑定 |
 | 每次实际模型请求检查私有正文和身份 | 每次只含本成员内容和账号标识 | 真实 DSH 的上下文隔离；模型回复为脚本 |
 | 1 个 worker 运行、99 个排队时重启 | 100 个原工单与队列恢复 | 真实 Runtime/SQLite 与 DSH Session 恢复 |
+| 同一微信账号在其 worker 运行时连续聊三轮 | 三条回复均先于工单完成，闲聊没有新增工单 | 前台模型为 `hy4-flash`，被挂起的后台模型请求为 `hy4`，随后在原账号收到结果 |
 | 10 次 worker 提问 → 私聊追问 → attach 原工单 → ready → 结果 | 全部通过，其余 90 个工单直接完成 | 定向 Attention、追问与原账号结果回传 |
 | 全部投递与完成后再次重启 | 100 个 completed、210 次 mock 投递，重启不重复发送 | 接单、提问和结果的账号范围及回执恢复 |
 | 每个个人页面读取自己的 10 个结果 | 共 100 个，其他成员标记不出现 | 个人页面接口的数据范围 |

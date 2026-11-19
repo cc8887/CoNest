@@ -106,7 +106,8 @@ docker cp "$conest_mock_container:/data/container-mock-report.json" .artifacts/c
 python3 - .artifacts/container-mock-report.json <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
-assert value['admittedUsers']==10 and value['privateRouters']==10 and value['tickets']==100 and value['deliveries']==210
+assert value['admittedUsers']==10 and value['privateRouters']==10 and value['tickets']==100 and value['deliveries']==213
+assert value['foregroundChat']=={'turns':3,'routerModel':'hy4-flash','workerModel':'hy4','extraTickets':0}
 assert value['reportToOriginAndReceipt']=='100 matched' and value['replayAndCompletedRestart']=='passed'
 print('Linux image: 10 web tenants, 100 Tickets, one shared queue, isolation and original-account receipts: PASS')
 PY

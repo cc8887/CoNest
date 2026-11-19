@@ -15,7 +15,7 @@ chmod 700 secrets
 chmod 600 secrets/model-test.env
 ```
 
-在本机编辑 `secrets/model-test.env`，填写已有 Tencent hy4 API key。模型供应商为 `https://copilot.tencent.com/v2/`，协议为 `openai-completions`，模型为 `hy4`。镜像不带真实凭证，PIN 和 key 不要贴到聊天中。Docker 管理员能访问容器环境，部署主机须可信。
+在本机编辑 `secrets/model-test.env`，填写已有 Tencent API key。模型供应商为 `https://copilot.tencent.com/v2/`，协议为 `openai-completions`。从当前源码初始化的新成员模式用 `hy4-flash` 作为前台模型，`hy4` 作为后台模型。旧数据卷的设置按微信 Runtime 文档升级。镜像不带真实凭证，PIN 和 key 不要贴到聊天中。Docker 管理员能访问容器环境，部署主机须可信。
 
 DSH 管理服务要求回环监听，Compose 沿用 Linux `network_mode: host`，共享容器引擎宿主网络，不做桥接端口映射。Docker Desktop 需启用 host networking（4.34+）；Windows/WSL/Podman 到宿主的网络路径仍需现场验证。
 
@@ -67,6 +67,6 @@ docker build --platform linux/amd64 --build-arg VERSION=0.2.0-alpha.1 -t conest:
 bash scripts/docker-smoke.sh conest:0.2.0-alpha.1
 ```
 
-构建执行完整 `pnpm check`。smoke 检查镜像架构、非 root、原生加载器、空目录网页注册启动、DSH 签名登录、个人界面、未授权拒绝和重启；随后在不允许外部网络的镜像里，用真实 DSH 与 mock 模型/iLink 跑 10 租户、100 工单和 210 次回传，报告见附件 VALIDATION.json。这不代替真实微信、hy4 性能或 N100 容量验收。
+构建执行完整 `pnpm check`。smoke 检查镜像架构、非 root、原生加载器、空目录网页注册启动、DSH 签名登录、个人界面、未授权拒绝和重启。当前源码的离线镜像测试用真实 DSH 与 mock 模型/iLink 跑 10 租户和 100 工单，检查 210 次工单回传及 worker 运行期间的 3 条前台回复。
 
 早先 mock 中的偶发回执文字断言已定位为测试 HTTP 接收端逐块解码 UTF-8，造成中文替换字符。现已完整拼接后解码，并通过每个字节分割位置和逐字节传输回归。容器报告保存在临时数据卷后提取，避免退出后 noexec tmpfs 消失导致报告丢失。

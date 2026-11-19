@@ -133,7 +133,7 @@ export class Runtime extends Service implements SourceHost {
         lifetime: this.lifetime, members, routerCwd: machine.stateDir,
         closing: () => this.closing(), environment,
         tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket)
-          : mainTools({ ...this.toolHost, resources: { ...resources, masterId: agent.id } }, agent) })
+          : mainTools({ ...this.toolHost, resources: { ...resources, masterId: agent.id } }, agent, members.isRouter(agent.id)) })
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, members, requestPass: () => { this.passes.request() } })
