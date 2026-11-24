@@ -334,6 +334,7 @@ const TEXT = {
   'basis.addressed': ['点名方式', 'Addressed by'],
   'addressed.mention': ['@ 智能体', 'Mention'],
   'addressed.direct': ['私聊', 'Direct message'],
+  'addressed.group': ['群聊智能寻址', 'Intelligent group addressing'],
   executorIntro: ['执行器执行派工：每个工单一个执行器 Session 和执行目录。', 'The Executor runs Assignments: one Executor Session and directory per Ticket.'],
   executorModel: ['执行器模型', 'Executor model'],
   executorModelHint: ['保存后用于新建的执行器 Session，已有 Session 保持原选择。留空继承 DSH 默认值。', 'Applies to new Executor Sessions; existing Sessions keep their choice. Leave empty to inherit the DSH default.'],

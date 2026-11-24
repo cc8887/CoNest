@@ -13,6 +13,33 @@
     - id: dsh-superagent-weixin
       name: dsh-superagent/weixin-watch
       disabled: false
+    # Member routers and workers differ by the tools registered in their Agent scopes.
+    # Both need time context and compaction without mounting host execution plugins.
+    - id: dsh-superagent-member-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: dsh-superagent-member
+        name: CoNest 成员会话
+        description: CoNest 成员模式的路由器和工单执行器专用。
+        order: 92
+        plugins:
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
     # The agent preset of every Executor Session (WORKER_PRESET in src/app/sessions.ts); the main Session has its own, below.
     # It is DSH's `standard` preset with only what a worker needs, and a shell whose foreground command moves to a background job
     # after 5 seconds, so a long command does not hold back a person's message, which the Session takes at its next step. Left

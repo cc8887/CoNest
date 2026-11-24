@@ -12,6 +12,7 @@ const TASK_TOOLS = new Set(['orchestrator_read', 'orchestrator_route', 'orchestr
   'orchestrator_ticket_note', 'orchestrator_trigger_requeue', 'orchestrator_eval', 'orchestrator_eval_read', 'orchestrator_eval_decide',
   'orchestrator_reply', 'orchestrator_thread_unsubscribe', 'orchestrator_ack', 'orchestrator_thread_unrelated',
   'orchestrator_thread_follow', 'orchestrator_trigger_handback', 'orchestrator_report'])
+const SCHEDULE_TOOLS = new Set(['orchestrator_schedule_create', 'orchestrator_schedule_list', 'orchestrator_schedule_cancel'])
 
 /** Owns member grants and router addressing; models supply resource ids, never their own identity or authority. */
 export class Members {
@@ -52,6 +53,8 @@ export class Members {
   }
   routers(): string[] { return [...this.sessions.keys()] }
   isRouter(id: string): boolean { return this.sessions.has(id) }
+  routerMember(id: string): string | undefined { return this.allowed(id) ? this.sessions.get(id) : undefined }
+  isActiveMember(id: string): boolean { return !!this.config().members?.some(member => member.id === id && member.status === 'active') }
   private active(member: string): boolean {
     const settings = this.store.settings(), config = this.config(settings)
     return !!config.members?.some(item => item.id === member && item.status === 'active') && (settings.sources.personal?.enabled === true
@@ -105,7 +108,7 @@ export class Members {
   canTicket(session: string, id: string): boolean { return this.match(session, this.ticketOwner(id)) }
   /** Browser identity comes from its own authenticated tenant session, never a request-supplied member id. */
   canMemberTicket(member: string, id: string): boolean {
-    return !!this.config().members?.some(item => item.id === member && item.status === 'active') && this.ticketOwner(id) === member
+    return this.isActiveMember(member) && this.ticketOwner(id) === member
   }
   canThread(session: string, id: string): boolean { return this.match(session, this.threadOwner(id)) }
   canDecision(session: string, id: string): boolean {
@@ -169,6 +172,7 @@ export class Members {
     throw forbidden()
   }
   tools(session: string, name: string): boolean {
+    if (SCHEDULE_TOOLS.has(name)) return this.isRouter(session)
     if (!this.isolated()) return true
     if (ADMIN.has(name) || !TASK_TOOLS.has(name)) return false
     if (this.sessionOwner(session) !== SHARED && ['orchestrator_eval', 'orchestrator_eval_read', 'orchestrator_eval_decide'].includes(name)) return false

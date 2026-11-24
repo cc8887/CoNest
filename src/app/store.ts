@@ -9,13 +9,17 @@ import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave }
 import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
+import type { PerformanceLabel } from './performance.ts'
 
 /** A Trigger's position on its thread timeline, ordered by timestamp and then `id` as tie-breaker. */
 export interface TimelinePlace { at: string; id: string }
 /** Why a message was dropped: its conversation can never receive it (`channelGone`), or its Source no longer listens to it (`channelIgnored`). */
 export type DropReason = 'channelGone' | 'channelIgnored'
 /** Outbound message receipt tracked in the outbox from the moment it is queued (`pending`, `sent`, or `dropped`); delivery attempt counts live on its `reply` effect. */
-export interface Receipt extends OutboundMessage { status: ReplyStatus; dropped?: { at: string; reason: DropReason } }
+export interface DeliveryTiming extends PerformanceLabel { enqueued: number; answer?: { received: number; dedup: string } }
+export interface Receipt extends Omit<OutboundMessage, 'answerTo'> {
+  status: ReplyStatus; dropped?: { at: string; reason: DropReason }; timing?: DeliveryTiming
+}
 /** A dropped outbound message receipt, with the timestamp and reason it was dropped. */
 export type Dropped = Receipt & { dropped: { at: string; reason: DropReason } }
 /** Saved settings snapshot with the policy version and ticket notifications it produced (`internal` saves have no origin). */
@@ -84,6 +88,11 @@ export class Store implements Repositories {
             CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
             CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
             CREATE INDEX IF NOT EXISTS effect_due ON effect(kind, due, seq);
+            CREATE TABLE IF NOT EXISTS performance_sample (
+              at INTEGER NOT NULL, role TEXT NOT NULL, model TEXT NOT NULL, metric TEXT NOT NULL,
+              elapsed REAL, failed INTEGER, dedup TEXT UNIQUE
+            );
+            CREATE INDEX IF NOT EXISTS performance_sample_at ON performance_sample(at);
           `)
           this.addColumns()
           if (migrating) migrateTo11(this)
@@ -263,8 +272,8 @@ export class Store implements Repositories {
      * Records a new pending message receipt; an already-recorded message ID keeps its original receipt.
      * @returns Whether the message ID was newly recorded.
      */
-    add: (message: OutboundMessage): boolean => {
-      const receipt: Receipt = { ...message, status: 'pending' }
+    add: ({ answerTo: _answerTo, ...message }: OutboundMessage, timing?: DeliveryTiming): boolean => {
+      const receipt: Receipt = { ...message, status: 'pending', ...(timing ? { timing } : {}) }
       return Number(this.db.prepare('INSERT OR IGNORE INTO outbox (id, value) VALUES (?, ?)').run(message.id, JSON.stringify(receipt)).changes) > 0
     },
     /**
@@ -275,7 +284,7 @@ export class Store implements Repositories {
       const settled = outcome === 'sent' ? { status: 'sent' } : { status: 'dropped', dropped: { at: new Date().toISOString(), reason: outcome } }
       const { id, channel, text, kind, ticketId } = message
       const updated = this.db.prepare("UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'")
-        .run(JSON.stringify(settled), id)
+        .run(JSON.stringify({ ...settled, timing: null }), id)
       if (!Number(updated.changes)) this.db.prepare('INSERT OR IGNORE INTO outbox (id, value) VALUES (?, ?)')
         .run(id, JSON.stringify({ id, channel, text, kind, ...ticketId ? { ticketId } : {}, ...settled }))
     },

@@ -1,6 +1,7 @@
 /** Trigger-scoped Feishu context reader; retrieved messages are returned for model inspection without entering intake. */
 import { z } from 'zod'
 import type { Trigger } from '../core/index.ts'
+import type { GroupReference } from '../ingress/group-address.ts'
 import { validItems, type Commands } from '../infra/commands.ts'
 import { admissionImageKeys, readAdmissionImage } from './feishu-image.ts'
 import { feishuRef, feishuTime, HistoricalMessageSchema, HistoryPageSchema, historyText, withMentionNames, type HistoricalMessage }
@@ -18,7 +19,7 @@ const messageSchema = z.object({
   message_id: messageId, chat_id: z.string(), content: z.string().optional(), msg_type: z.string(),
   sender: z.object({ id: z.string(), name: z.string().optional(), open_bot_id: z.string().optional(), sender_type: z.string() }),
   create_time: z.string(), update_time: z.string().optional(), updated: z.boolean().optional(), deleted: z.boolean().optional(),
-  mentions: z.array(z.object({ id: z.string(), name: z.string().optional(), key: z.string().optional() })).optional(),
+  mentions: z.array(z.object({ id: z.string().default(''), name: z.string().optional(), key: z.string().optional() })).optional(),
   message_app_link: z.string().optional(), thread_id: z.string().optional(), root_id: z.string().optional(), parent_id: z.string().optional(),
 })
 export type FeishuMessage = z.infer<typeof messageSchema>
@@ -144,6 +145,32 @@ export async function feishuRead(commands: Commands, ref: FeishuRef, resource: s
   const result = await readFeishu(commands, ref, resource, pageSize)
   if ('messages' in result) return { ...result, messages: result.messages.map(feishuView) }
   return { status: result.status, message: result.message ? feishuView(result.message) : null }
+}
+
+/** Reads a small window before the current message, preferring its topic when one is known. */
+export async function feishuAddressContext(commands: Commands, trigger: Trigger): Promise<ContextMessage[]> {
+  const ref = sourceRef(trigger)
+  const limit = 8
+  let messages: ContextMessage[] | undefined
+  if (trigger.meta.threadId) {
+    const page = await readFeishu(commands, ref, `feishu/${trigger.id}/thread`, limit + 1, 'desc')
+    if ('messages' in page && page.status !== 'no_thread') messages = page.messages.map(message => ({
+      ...feishuView(message), from: message.sender.open_bot_id || message.sender.id,
+    }))
+  }
+  messages ??= (await chatAround(commands, ref, undefined, limit, 0)).messages
+  return messages.filter(message => !message.deleted && message.id !== ref.messageId && Date.parse(message.at) < Date.parse(trigger.at))
+    .sort((first, second) => Date.parse(first.at) - Date.parse(second.at)).slice(-limit)
+}
+
+/** Resolves a native message reference using the same chat-scoped checks as agent context reads. */
+export async function feishuAddressReference(commands: Commands, trigger: Trigger, part: 'parent' | 'root'): Promise<GroupReference | undefined> {
+  const result = await readFeishu(commands, sourceRef(trigger), `feishu/${trigger.id}/${part}`, 1)
+  if (!('message' in result) || result.status !== 'available' || !result.message
+    || result.message.message_id !== (part === 'parent' ? trigger.meta.parentId : trigger.meta.rootId)) return
+  const { sender, mentions = [] } = result.message
+  return { senderIds: [sender.id, ...(sender.open_bot_id ? [sender.open_bot_id] : [])], bot: sender.sender_type === 'app' || sender.sender_type === 'bot',
+    mentions: mentions.map(mention => mention.id) }
 }
 function sourceRef(trigger: Trigger): FeishuRef {
   const ref = feishuRef(trigger)

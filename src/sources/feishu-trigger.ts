@@ -10,8 +10,9 @@ export const feishuChannel = (chatId: string, messageId: string, direct = false)
 /** A message as the live event consumer prints it; the history and topic-page paths normalize what they read into this shape. */
 const EventSchema = z.object({ message_id: z.string(), chat_id: z.string(), chat_type: z.enum(['p2p', 'group']),
   sender_id: z.string(), sender_type: z.enum(['user', 'bot']), content: z.string(), create_time: z.string(),
-  mentions: z.array(z.object({ id: z.string(), key: z.string().optional(), name: z.string().optional() })).default([]),
-  root_id: z.string().optional(), parent_id: z.string().optional(), thread_id: z.string().optional(), message_app_link: z.url().optional() })
+  mentions: z.array(z.object({ id: z.string().default(''), key: z.string().optional(), name: z.string().optional() })).default([]),
+  root_id: z.string().optional(), parent_id: z.string().optional(), reply_to: z.string().optional(),
+  thread_id: z.string().optional(), message_app_link: z.url().optional() })
 export type FeishuEvent = z.infer<typeof EventSchema>
 export const feishuThreadId = (chatId: string, rootId: string | undefined, messageId: string): string => `${chatId}:${rootId ?? messageId}`
 /** Deterministic trigger ID for a Feishu message; every read path for this message produces the same ID. */
@@ -33,14 +34,17 @@ export function feishuTrigger(input: unknown, botId: string, botAppId: string): 
   if (event.sender_id === botId || event.sender_id === botAppId) return
   const direct = event.chat_type === 'p2p'
   const mentioned = event.mentions.some(mention => mention.id === botId || mention.id === botAppId)
+  // The live CLI uses reply_to; the history API uses parent_id.
+  const parent = event.reply_to || event.parent_id
   const thread = feishuThreadId(event.chat_id, event.root_id, event.message_id)
   return { id: feishuTriggerId(event.message_id), source: SOURCE, threads: [{ source: SOURCE, id: thread }],
     actor: { source: SOURCE, id: event.sender_id }, human: event.sender_type === 'user',
     ...(direct ? { addressed: 'direct' as const } : mentioned ? { addressed: 'mention' as const } : {}),
     at: feishuTime(event.create_time), text: withMentionNames(event.content, event.mentions),
     channel: feishuChannel(event.chat_id, event.message_id, direct), ...(event.message_app_link ? { url: event.message_app_link } : {}),
-    meta: { chatId: event.chat_id, messageId: event.message_id, direct, mentioned, ...(event.root_id ? { rootId: event.root_id } : {}),
-      ...(event.parent_id ? { parentId: event.parent_id } : {}), ...(event.thread_id ? { threadId: event.thread_id } : {}) } }
+    meta: { chatId: event.chat_id, messageId: event.message_id, direct, mentioned, mentionIds: event.mentions.map(mention => mention.id),
+      ...(event.root_id ? { rootId: event.root_id } : {}),
+      ...(parent ? { parentId: parent } : {}), ...(event.thread_id ? { threadId: event.thread_id } : {}) } }
 }
 export const feishuParent = (trigger: Trigger): string | undefined =>
   trigger.source === SOURCE && typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined
@@ -57,7 +61,7 @@ export const HistoricalMessageSchema = z.looseObject({
   deleted: z.boolean().optional(), message_app_link: z.string().optional(),
   sender: z.looseObject({ id: z.string().default(''), sender_type: z.string() }),
   body: z.looseObject({ content: z.string() }).optional(),
-  mentions: z.array(z.looseObject({ id: z.string(), key: z.string().optional(), name: z.string().optional() })).optional(),
+  mentions: z.array(z.looseObject({ id: z.string().default(''), key: z.string().optional(), name: z.string().optional() })).optional(),
 })
 export type HistoricalMessage = z.infer<typeof HistoricalMessageSchema>
 /** One page of the history API; items are validated individually so an unreadable item is skipped alone. */

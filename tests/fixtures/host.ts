@@ -3,7 +3,7 @@
  * allowed member Alice (`ou_alice`), listened chat `oc_team`, and `auto` eval mode. Stop it with `stop()`.
  */
 import { Context } from '@deepseek-ai/cordis'
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi, type Mock } from 'vitest'
@@ -11,13 +11,15 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { Runtime } from '../../src/app/runtime.ts'
 import { Store } from '../../src/app/store.ts'
 import { SettingsSchema } from '../../src/policy.ts'
-import { feishuKind, feishuTrigger } from '../../src/sources/feishu.ts'
+import { createFeishuKind, feishuKind, feishuTrigger } from '../../src/sources/feishu.ts'
+import type { FeishuReply } from '../../src/sources/feishu-channel.ts'
 import { githubKind } from '../../src/sources/github.ts'
 import { Commands } from '../../src/infra/commands.ts'
 import { credentialHelper, workerGitConfig } from '../../src/infra/environment.ts'
 import type { Trigger } from '../../src/core/index.ts'
 import { testMachine } from './deployment.ts'
 import type { WeixinClient } from '../../src/sources/weixin-api.ts'
+import type { OctopTransportOptions, QqTransportFactory } from '../../src/sources/octop-transport.ts'
 
 export const MEMBER = 'ou_alice'
 export const CHAT = 'oc_team'
@@ -132,10 +134,17 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
   return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }
 }
 
-/** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void, options: { database?: string; members?: readonly string[]; portal?: boolean; weixin?: WeixinClient } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
-  if (options.database) copyFileSync(options.database, join(directory, 'orchestrator.sqlite'))
+/**
+ * @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored.
+ * @param options.stateDir - a caller-owned directory whose database survives stop and can be reopened.
+ */
+export async function startRuntime(seed?: (store: Store) => void, options: { database?: string; stateDir?: string; members?: readonly string[]; portal?: boolean;
+  weixin?: WeixinClient; llmStream?: Context['llm']['stream']; qq?: Omit<OctopTransportOptions, 'accountId'>; qqTransport?: QqTransportFactory;
+  feishuReply?: FeishuReply } = {}) {
+  const directory = options.stateDir ?? mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
+  const database = join(directory, 'orchestrator.sqlite')
+  const reopening = !!options.stateDir && existsSync(database)
+  if (options.database && !reopening) copyFileSync(options.database, database)
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
   const repository = { default_branch: 'master', permissions: { push: true } }
   vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : repository)
@@ -228,34 +237,42 @@ export async function startRuntime(seed?: (store: Store) => void, options: { dat
         })
       })
       agents.set(sessionId, { id: sessionId, ctx: agentCtx, inbox, followup: deliver('queue'), steer: deliver('steer'), inject: vi.fn(), session, cancel,
+        options: {}, model: { select: vi.fn() },
         get status() { return status }, set status(next: string) { status = next; if (next === 'idle') for (const wake of idle.splice(0)) wake() },
         // Once its turn ended, as DSH's does.
         whenIdle: () => status === 'idle' ? Promise.resolve() : new Promise<void>(resolve => { idle.push(resolve) }) } as never)
     }),
     selectModel: vi.fn(async () => {}), resolveAgent: vi.fn(resolveDefault), rename: vi.fn(async () => {}),
     prompt: vi.fn(() => { throw new Error('Plugin delivery must not use user RPC') }),
-    inspect: vi.fn(async () => ({ events: [] })),
   }
+  const sessionQuery = { observeSession: vi.fn(async () => ({ events: [], [Symbol.dispose]: () => {} })) }
   const reader = { read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} }
   const persistence = { flush: vi.fn(async () => {}), open: vi.fn(async () => reader) }
   const webServer = { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }
   const jobs = jobRegistry(id => agents.get(id))
   const subagents = subagentRuntime(agents)
-  const services = { agents, llm: { resolveCallConfig: vi.fn(async (value: unknown) => value) }, sessionController: controller,
+  const services = { agents, llm: { resolveCallConfig: vi.fn(async (value: unknown) => value), stream: options.llmStream }, sessionController: controller, sessionQuery,
     sessionPersistence: persistence, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer,
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   if (options.portal) ctx.reflect.provide('connection', { requestRejection: (req: { headers: Record<string, string> }) => req.headers.authorization === 'Bearer test-operator' ? undefined : 401 })
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
-  const seeded = new Store(join(directory, 'orchestrator.sqlite'))
-  const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }
-  seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
-  seed?.(seeded)
-  seeded.close()
-  const runtime = new Runtime(ctx, testMachine({ stateDir: directory, ...options.portal ? { portal: { host: '127.0.0.1', port: 0 } } : {} }), vi.fn(), { weixin: options.weixin, bindingPollMs: options.weixin ? 10 : undefined })
+  if (!reopening || seed) {
+    const seeded = new Store(database)
+    try {
+      if (!reopening) {
+        const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }
+        seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
+      }
+      seed?.(seeded)
+    } finally { seeded.close() }
+  }
+  const runtime = new Runtime(ctx, testMachine({ stateDir: directory, ...options.portal ? { portal: { host: '127.0.0.1', port: 0 } } : {} }), vi.fn(),
+    { weixin: options.weixin, bindingPollMs: options.weixin ? 10 : undefined, qq: options.qq, qqTransport: options.qqTransport })
   await runtime.ready
-  runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
+  runtime.sources.register(options.feishuReply ? createFeishuKind(options.feishuReply) : feishuKind)
+  runtime.sources.register(githubKind)
   const settings = runtime.store.settings()
   runtime.store.saveSettings({ ...settings, eval: { ...settings.eval, mode: 'auto' },
     policy: { ...settings.policy, sources: { ...settings.policy.sources, feishu: { allowed: members, syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } },
@@ -301,12 +318,17 @@ export async function startRuntime(seed?: (store: Store) => void, options: { dat
     await http(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
     return { status, body: JSON.parse(text) as Record<string, any> }
   }
-  async function stop() { await runtime.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) }
+  async function stop() {
+    try { await runtime.stop() } finally {
+      vi.restoreAllMocks()
+      if (options.stateDir === undefined) rmSync(directory, { recursive: true, force: true })
+    }
+  }
   /** The Session's model takes its next step, which takes the messages steered in since its last. */
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** A step of the worker claims what waits for it, and is cut off before the Session took it. */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, registration, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, registration, controller, sessionQuery, subprocess, hooks, resolveDefault, stop,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

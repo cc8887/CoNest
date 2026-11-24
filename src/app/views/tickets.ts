@@ -1,5 +1,5 @@
 /** Ticket list, ticket detail, mandate basis formatting, and executor load views. */
-import { liveTicket, threadKey, ticketStage, type AcceptMode, type AdmissionCell, type MandateBasis, type Ticket,
+import { liveTicket, threadKey, ticketStage, type AcceptMode, type AddressKind, type AdmissionCell, type MandateBasis, type Ticket,
   type TicketStage } from '../../core/index.ts'
 import { workerSessionId } from '../../executor/dsh.ts'
 import type { Store } from '../store.ts'
@@ -8,7 +8,7 @@ import { channelLink, decisionView, newestFirst, page, snapshot, threadSummary, 
 import { markdown, preview } from './text.ts'
 
 export type BasisFact =
-  | { name: 'addressed'; value: 'mention' | 'direct' } | { name: 'followup' } | { name: 'admission'; value: AdmissionCell } | { name: 'observation' }
+  | { name: 'addressed'; value: AddressKind } | { name: 'followup' } | { name: 'admission'; value: AdmissionCell } | { name: 'observation' }
   | { name: 'mode'; value: AcceptMode } | { name: 'rules'; value: { id: string; name: string }[] } | { name: 'sender'; value: string }
   | { name: 'legacyAuthority'; value: string } | { name: 'bot' }
 /**

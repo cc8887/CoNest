@@ -10,6 +10,7 @@ export interface ChannelRef { source: string; thread: string; address: Record<st
 
 /** Stable key of a thread across the whole domain. */
 export const threadKey = (ref: ThreadRef): string => `${ref.source}:${ref.id}`
+export type AddressKind = 'mention' | 'direct' | 'group'
 /**
  * Normalizes valid timestamps to `Date#toISOString` form so stored timestamps compare lexicographically in memory and SQL;
  * values that do not parse as a timestamp are returned unchanged.
@@ -28,8 +29,8 @@ export interface Trigger {
   actor: ActorRef
   /** Source-declared: the event was written by a person rather than a bot, CI, or this agent. */
   human: boolean
-  /** Source-declared: the sender addressed the agent, by mentioning it or in a direct message to it. */
-  addressed?: 'mention' | 'direct'
+  /** How the source or host recognized a message directed to this agent. */
+  addressed?: AddressKind
   at: string
   text: string
   channel?: ChannelRef
@@ -114,12 +115,12 @@ interface Received { source?: string; scope?: Record<string, unknown>; row?: str
  * `sender` names the allowed sender at acceptance time, and `rules` the rules an assessment matched.
  */
 export type MandateBasis = Received & { sender?: string; rules?: string[] } & (
-  | { via: 'addressed'; addressed: 'mention' | 'direct' }
+  | { via: 'addressed'; addressed: AddressKind }
   | { via: 'followup'; authority?: string }
-  | { via: 'admission'; cell: AdmissionCell; addressed?: 'mention' | 'direct'; observation?: { mode: AcceptMode } }
-  | { via: 'listed'; addressed?: 'mention' | 'direct'; observation?: { mode?: AcceptMode }; authority?: string }
+  | { via: 'admission'; cell: AdmissionCell; addressed?: AddressKind; observation?: { mode: AcceptMode } }
+  | { via: 'listed'; addressed?: AddressKind; observation?: { mode?: AcceptMode }; authority?: string }
   /** A message of a bot on its Source's bot list: an inferred candidate at most, never an explicit request or a stop. */
-  | { via: 'bot'; addressed?: 'mention' | 'direct'; observation: { mode: AcceptMode } }
+  | { via: 'bot'; addressed?: AddressKind; observation: { mode: AcceptMode } }
 )
 
 /** Immutable authorization produced by an accept decision; execution is bounded by it and it never changes. */

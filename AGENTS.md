@@ -48,3 +48,10 @@
 - 用户已授权重新打包并发布，`v0.2.0-alpha.1` 已在 2026-11-17 发布为预发布版：`https://github.com/cc8887/CoNest/releases/tag/v0.2.0-alpha.1`。发布源码/镜像 revision 为 `a57f3747cc11804318e581966b7c30d2a8525f60`；70 个测试文件、1268 项测试及类型检查/构建通过。Linux/amd64 镜像分支和标签两轮检查均通过：非 root、只读根/noexec、默认 CoNest 后台、认证、个人界面、重启，以及断外网的真实 DSH + mock 模型/iLink 10 租户/100 工单/210 次定向投递。标签发布 run 为 `44115175378`，分支验收 run 为 `44114381740`。
 - 新版共 7 个附件，含 Docker 归档、源码、Compose、环境模板、DOCKER.md、VALIDATION.json 和 SHA256SUMS。镜像归档为 `conest-0.2.0-alpha.1-linux-amd64.docker.tar.gz`，327352832 字节，SHA256 `f7b85bb34494954badada2f8d49d6a4d46f15ab215740100f0494f1ea28b1536`。SHA256SUMS 的 6 个条目全部与 GitHub 服务端摘要一致，其他 6 个小附件已下载逐个核对、源码包版本/私有文件排除检查通过。因本机镜像下载缓慢，未完成整个 Docker 归档的本地下载/重算，使用服务端 digest 对照，不应描述为本地加载镜像验证。附件证据在 `.artifacts/release-0.2.0-alpha.1-verification.json`，半成品镜像标记为 `.partial`。
 - Chrome 通过含 token 的启动链接实际进入 `http://127.0.0.1:<port>/` 的 CoNest 后台；点击高级入口才打开 `/index.html` 的 DSH 页面。截图 `.artifacts/release-backend-default.jpg` 使用模拟数据，测试进程和私有临时状态已清理。真实 N100、多微信账号、远程 HTTPS/WSL 入口与常驻恢复仍需现场验收。旧单 owner 卷不能原地变成成员模式，见新版 DOCKER.md。
+
+## 离线回归约定
+
+- 工单、队列、Runtime 恢复、租户权限、消息寻址或聊天接入有改动时，优先通过共享后端入口补对应回归，并在仓库根目录实际运行 `pnpm test:offline`。汇报测试数量、耗时与验证范围。用临时状态和合成输入保持测试可重复。
+- `tests/offline-personal.spec.ts` 通过本地个人空间 HTTP 调用真实 CoNest Runtime 和临时 SQLite，以预设 Agent 工具调用驱动建单、排队、追问续接和结果。10 个成员各提交 10 张工单，验证单 worker 执行 1 张、排队 99 张时关闭并重开同一份 SQLite。重启后用原登录 Cookie 重放全部 100 个请求，核对工单 ID、各成员可见范围、越权拒绝和 100 张完成结果。另验证重放追问答复时已完成工单保持完成。
+- `tests/offline-group-address.spec.ts` 把合成群消息送入共享寻址逻辑，覆盖显式 @、回复引用和无 @ 上下文判断，也检查对其他成员说话、低置信度和无效模型输出时保持沉默。两组测试均使用预设模型行为，无需微信、飞书、QQ 或模型凭据。
+- 离线回归不读取 `CONEST_TEST_API_KEY`。涉及真实模型协议、模型工具调用或寻址效果时，按需单独用测试供应商运行冒烟，遵守上文的凭据处理约定，并在汇报中注明真实模型的验证结果。

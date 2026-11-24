@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { FeishuBotSchema } from '../deployment.ts'
-import { feishuLink, sendFeishu } from './feishu-channel.ts'
+import { feishuLink, sendFeishu, type FeishuReply } from './feishu-channel.ts'
 import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
 import { SOURCE, feishuTriggerId } from './feishu-trigger.ts'
@@ -21,13 +21,25 @@ const MembersSchema = z.looseObject({
 const FeishuConfigSchema = FeishuBotSchema.extend({
   readPageSize: z.number().int().min(1).max(50).default(20),
   linkTimeoutMs: z.number().int().min(1).max(90000).default(5000),
-  chats: z.array(z.object({ chatId: z.string().regex(/^oc_[a-zA-Z0-9]+$/), name: z.string().trim().max(60).optional(), listen: z.enum(['mentions', 'all']) }).strict())
+  chats: z.array(z.object({ chatId: z.string().regex(/^oc_[a-zA-Z0-9]+$/), name: z.string().trim().max(60).optional(),
+    listen: z.enum(['mentions', 'all', 'smart']), autonomousBotId: z.string().trim().regex(/^(cli_[a-zA-Z0-9]+)?$/).optional() }).strict())
     .refine(chats => new Set(chats.map(chat => chat.chatId)).size === chats.length, 'Duplicate chat IDs')
     .default([]),
   directMessages: z.boolean().default(true),
+  groupSchedules: z.boolean().optional(),
+  groupBots: z.array(z.object({ appId: z.string().regex(/^cli_[a-zA-Z0-9]+$/), openId: z.string().regex(/^ou_[a-zA-Z0-9]+$/),
+    names: z.string().trim().min(1).max(240), role: z.string().trim().max(300).optional() }).strict()).max(10).optional(),
+  groupModelProvider: z.string().trim().max(200).optional(),
+  groupModel: z.string().trim().max(200).optional(),
   otherChats: z.enum(['none', 'mentions']).default('none'),
-}).strict()
+}).strict().refine(config => !config.groupSchedules || config.identityOnly === true, 'Group schedules require Feishu member identity mode (identityOnly)')
+  .refine(config => !!config.groupModel === !!config.groupModelProvider, 'Set both the group routing model and its provider')
+  .refine(({ groupBots: bots = [], chats }) => new Set(bots.map(bot => bot.appId)).size === bots.length
+    && new Set(bots.map(bot => bot.openId)).size === bots.length
+    && (!bots.length || chats.every(chat => chat.listen !== 'smart' || bots.some(bot => bot.appId === chat.autonomousBotId))),
+  'List each group bot once and select one listed autonomous bot per intelligent group')
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
+const smart = { zh: '智能寻址', en: 'Intelligent addressing' }
 export const feishuKind: SourceKind<FeishuConfig> = {
   kind: SOURCE,
   refreshLabels: (host, signal) => refreshChatNames(sourceContext(host, feishuKind), signal),
@@ -38,20 +50,35 @@ export const feishuKind: SourceKind<FeishuConfig> = {
     { key: 'cli', type: 'text', label: { zh: '机器人的 lark-cli', en: 'Bot lark-cli' },
       hint: { zh: '命令名或绝对路径，指向只允许机器人身份（strict mode bot）的 lark-cli 配置；执行器以 lark-cli 调用它。保存时读取应用和机器人，然后重启 dsh-superagent。', en: 'A command name or absolute path of a lark-cli configuration that allows only the bot identity (strict mode bot); the Executor calls it as lark-cli. Saving reads the app and the bot, then restarts dsh-superagent.' } },
     { key: 'chats', type: 'rows', label: { zh: '接收的群', en: 'Chats' },
-      hint: { zh: '“仅 @”只接收 @ 机器人的消息和已有工单的线程；“全部消息”也接收其余消息，评估可以按规则从中推断工作，需要机器人有读取全部消息的权限。', en: '"@ only" receives messages that mention the bot and Threads that have Tickets; "All" also receives the rest, from which Eval may infer work under the rules; the bot needs permission to read all messages.' },
+      hint: { zh: '“仅 @”接收提及和已有工单线程。“全部消息”按评估规则观察群聊。“智能寻址”先判断消息是否发给机器人。后两项需要读取群内全部消息的权限。', en: '“@ only” receives mentions and existing Ticket threads. “All” observes group messages under Eval rules. “Intelligent addressing” first checks who the message is for. Both require permission to read all group messages.' },
       columns: [
         { key: 'chatId', type: 'text', label: { zh: '群', en: 'Chat' }, pattern: 'oc_[a-zA-Z0-9]+', choose: { zh: '选择机器人已加入的群', en: 'Choose a chat the bot has joined' }, refresh: { zh: '刷新群列表', en: 'Refresh chats' } },
-        { key: 'listen', type: 'select', label: { zh: '接收', en: 'Receive' }, options: [{ value: 'mentions', label: { zh: '仅 @', en: '@ only' } }, { value: 'all', label: { zh: '全部消息', en: 'All' } }] },
+        { key: 'listen', type: 'select', label: { zh: '接收', en: 'Receive' }, options: [{ value: 'mentions', label: { zh: '仅 @', en: '@ only' } }, { value: 'all', label: { zh: '全部消息', en: 'All' } }, { value: 'smart', label: smart }] },
+        { key: 'autonomousBotId', type: 'text', optional: true, pattern: 'cli_[a-zA-Z0-9]+', label: { zh: '自主响应 Bot 应用 ID', en: 'Autonomous bot app ID' } },
       ] },
     { key: 'otherChats', type: 'select', label: { zh: '其他群', en: 'Other chats' }, options: [{ value: 'none', label: { zh: '不接收', en: 'Not received' } }, { value: 'mentions', label: { zh: '仅 @', en: '@ only' } }],
       hint: { zh: '机器人已加入、但没列在上面的群。“仅 @”接收那里 @ 机器人的消息；谁的消息能发起工作看策略里的准入。', en: 'Chats the bot has joined that are not listed above. "@ only" receives messages there that mention the bot; whose messages may originate work is the Policy\'s admission.' } },
     { key: 'directMessages', type: 'switch', label: { zh: '接收私聊', en: 'Direct messages' } },
+    { key: 'identityOnly', type: 'switch', label: { zh: '成员身份模式', en: 'Member identity mode' } },
+    { key: 'groupSchedules', type: 'switch', label: { zh: '允许已绑定成员在指定群创建定时任务', en: 'Allow bound members to create schedules in listed groups' } },
+    { key: 'groupBots', type: 'rows', advanced: true, label: { zh: '群聊 Bot 名单', en: 'Group bot roster' },
+      hint: { zh: '多 Bot 部署时为同一群配置相同的应用名单和自主响应 Bot。单 Bot 可留空，使用当前机器人的名称。', en: 'For multiple bots, configure the same app roster and autonomous bot for the group. A single bot can use its current display name with an empty roster.' },
+      columns: [
+        { key: 'appId', type: 'text', label: { zh: '应用 ID', en: 'App ID' }, pattern: 'cli_[a-zA-Z0-9]+' },
+        { key: 'openId', type: 'text', label: { zh: '当前应用所见的 Bot open_id', en: 'Bot open_id as seen by this app' }, pattern: 'ou_[a-zA-Z0-9]+' },
+        { key: 'names', type: 'text', label: { zh: '名称和别名（逗号分隔）', en: 'Name and aliases (comma separated)' } },
+        { key: 'role', type: 'text', optional: true, label: { zh: '群内职责', en: 'Group responsibilities' } },
+      ] },
+    { key: 'groupModelProvider', type: 'text', advanced: true, label: { zh: '寻址模型供应商', en: 'Addressing model provider' } },
+    { key: 'groupModel', type: 'text', advanced: true, label: { zh: '寻址模型', en: 'Addressing model' },
+      hint: { zh: '可填写轻量模型；留空时沿用已配置的评估模型。', en: 'Use a lightweight model, or leave blank to reuse a configured Eval model.' } },
     { key: 'readPageSize', type: 'number', advanced: true, min: 1, max: 50, label: { zh: '每页消息数', en: 'Messages per page' }, hint: { zh: '智能体读取线程和群历史时，每页的消息数。', en: 'Messages per page when agents read Threads and chat history.' } },
     { key: 'linkTimeoutMs', type: 'number', advanced: true, min: 1, max: 90000, label: { zh: '原消息链接的查询时限 / 毫秒', en: 'Original message link time limit / ms' },
       hint: { zh: '查询原消息链接最多等待的时间；超时后智能体改为直接读取原消息。', en: 'How long to wait for an original message\'s link; after that, agents read the message itself.' } },
   ],
   health: ['feishu', 'history'],
   scope({ meta }, config) {
+    if (config.identityOnly) return { listened: false, reason: 'identity_only' }
     if (meta.direct === true) return config.directMessages ? { listened: true, observed: false, row: 'direct' } : { listened: false, reason: 'direct_messages_not_allowed' }
     const chat = config.chats.find(item => item.chatId === meta.chatId)
     if (chat) return { listened: true, observed: chat.listen === 'all', row: chat.chatId }
@@ -59,8 +86,9 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   },
   // A reply goes only to a chat the Source still receives.
   channel: {
-    allowed: (address, config) =>
-      feishuKind.scope!({ meta: { chatId: address.chatId ?? '', direct: address.direct === 'true' } }, config).listened,
+    allowed: (address, config) => address.scheduleRequest !== undefined
+      ? config.identityOnly === true && config.groupSchedules === true && config.chats.some(chat => chat.chatId === address.chatId)
+      : feishuKind.scope!({ meta: { chatId: address.chatId ?? '', direct: address.direct === 'true' } }, config).listened,
     send: sendFeishu, link: feishuLink,
   },
   threadContext: feishuThreadContext,
@@ -91,8 +119,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
       const config = FeishuConfigSchema.parse(stored)
       const mentions = { zh: '仅 @', en: '@ only' }
       return [
-        ...config.chats.map(chat => ({ id: chat.chatId, label: chat.name || chat.chatId, note: chat.listen === 'all' ? { zh: '全部消息', en: 'All' } : mentions,
-          cells: { listedUnaddressed: chat.listen === 'all', unlistedAddressed: true, unlistedUnaddressed: chat.listen === 'all' } })),
+        ...config.chats.map(chat => ({ id: chat.chatId, label: chat.name || chat.chatId, note: chat.listen === 'all' ? { zh: '全部消息', en: 'All' } : chat.listen === 'smart' ? smart : mentions,
+          cells: { listedUnaddressed: chat.listen === 'all', unlistedAddressed: chat.listen !== 'smart', unlistedUnaddressed: chat.listen === 'all' } })),
         { id: 'other', label: { zh: '其他群', en: 'Other chats' }, note: config.otherChats === 'mentions' ? mentions : { zh: '不接收', en: 'Not received' },
           cells: { listedUnaddressed: false, unlistedAddressed: config.otherChats === 'mentions', unlistedUnaddressed: false } },
         { id: 'direct', label: { zh: '私聊', en: 'Direct messages' }, note: config.directMessages ? { zh: '接收', en: 'Received' } : { zh: '不接收', en: 'Not received' },
@@ -124,6 +152,9 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   },
   facts: (deployment): Record<string, Localized | string> => deployment?.feishu ? { cli: { zh: `当前机器人 ${deployment.feishu.name || deployment.feishu.botId}`, en: `Current bot ${deployment.feishu.name || deployment.feishu.botId}` } } : {},
 }
+export const createFeishuKind = (reply: FeishuReply): SourceKind<FeishuConfig> => ({
+  ...feishuKind, channel: { ...feishuKind.channel!, send: (host, message) => sendFeishu(host, message, reply) },
+})
 /** Returns the Feishu Source's settings, falling back to schema defaults while the Feishu plugin is disabled. */
 export const feishuSettings = (sources: SourceRegistry): FeishuConfig => sources.instance<FeishuConfig>(SOURCE)?.config ?? FeishuConfigSchema.parse({})
 

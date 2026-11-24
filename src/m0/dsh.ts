@@ -4,10 +4,11 @@ import Llm, { MessageId } from '@deepseek-ai/dsh-llm'
 import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
 import Agents from '@deepseek-ai/dsh-agent'
 import Tools from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import Prompt from '@deepseek-ai/dsh-system-prompt'
 import Loop from '@deepseek-ai/dsh-agent-loop'
 import Projections from '@deepseek-ai/dsh-session-projection'
-import Persistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as Persistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as Pi from '@deepseek-ai/dsh-llm-pi-ai'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -34,7 +35,7 @@ export class DshProbe {
     try {
       await Promise.all([
         ctx.plugin(Llm), ctx.plugin(Sessions), ctx.plugin(Agents), ctx.plugin(Projections),
-        ctx.plugin(Prompt, { includeHarnessIdentity: false, includeRuntimeContext: false }), ctx.plugin(Tools),
+        ctx.plugin(Prompt, { includeHarnessIdentity: false, includeRuntimeContext: false }), ctx.plugin(Tools), ctx.plugin(NativeToolExecutor),
         ctx.plugin(Persistence, { root: join(root, 'sessions'), compression: 'none' }),
         ctx.plugin(Loop, { agents: [], maxParallelToolCalls: 1 }),
         ctx.plugin(Pi, { providers: { 'conest-m0': {

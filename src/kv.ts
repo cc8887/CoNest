@@ -7,6 +7,8 @@ import type { SettingsVersion } from './app/store.ts'
 import type { SettingsSave } from './policy.ts'
 import type { Retry } from './sources/github.ts'
 import type { BindingRecord, PortalAccess, PortalInvite } from './app/portal.ts'
+import type { FeishuMemberBinding, FeishuPairing, GroupMatch, GroupScheduleOrigin } from './app/group-identity.ts'
+import type { Schedule } from './app/schedules.ts'
 
 /** Key of a KV record whose value has type `V`; a plain string represents an untyped key. */
 export type Key<V> = string & { readonly __value?: V }
@@ -34,11 +36,16 @@ export const KV = {
   runtime: { masterId: record<string>('master-id') },
   /** Members: immutable bot-owner pins, private router ids and per-Trigger ownership, committed in the original Store. */
   members: { binding: family<{ ownerId: string; memberId: string }, [account: string]>('member-binding:'),
-    session: family<string, [member: string]>('member-router:'), trigger: family<string, [trigger: string]>('member-trigger:') },
+    session: family<string, [member: string]>('member-router:'), trigger: family<string, [trigger: string]>('member-trigger:'),
+    feishuOwner: family<string, [app: string, sender: string]>('member-feishu-owner:', (...parts) => JSON.stringify(parts)),
+    feishuBinding: family<FeishuMemberBinding>('member-feishu-binding:'), groupMatch: family<GroupMatch>('member-group-match:') },
+  schedules: { record: family<Schedule, [member: string, id: string]>('schedule:'),
+    active: family<number, [member: string, id: string]>('active-schedule:'), group: family<GroupScheduleOrigin>('group-schedule-request:') },
   /** Portal: private QR jobs and hashed personal access credentials; never exposed to model tools. */
   portal: { binding: family<BindingRecord, [member: string]>('portal-binding:'),
     invite: family<PortalInvite, [member: string]>('portal-invite:'), access: family<PortalAccess, [digest: string]>('portal-access:'),
-    epoch: family<number, [member: string]>('portal-epoch:') },
+    epoch: family<number, [member: string]>('portal-epoch:'), feishuPairing: family<FeishuPairing>('portal-feishu-pairing:'),
+    feishuCode: family<string>('portal-feishu-code:') },
   /** Sessions: prompt revisions each Session has worked under, ordered oldest first; the last entry (`.at(-1)`) is its active revision. */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:') },
   /** Schema 11 migration: legacy main-Session queues imported into the effect table. */
@@ -50,6 +57,10 @@ export const KV = {
   weixin: { cursor: family<string, [account: string]>('weixin-cursor:'),
     context: family<string, [account: string, peer: string]>('weixin-context:', (...parts) => JSON.stringify(parts)),
     delivery: family<'sending' | 'uncertain' | 'sent'>('weixin-delivery:') },
+  /** QQ trial: member pins, inbound deduplication and stable passive reply sequences. */
+  qq: { binding: family<string>('qq-binding:'), inbound: family<string>('qq-inbound:'), sequence: family<number>('qq-sequence:'),
+    delivery: family<{ sequence: number; state: 'sending' | 'retry' | 'sent' }>('qq-delivery:'),
+    references: family<{ index: string; expiresAt: number; triggerId: string }[]>('qq-references:') },
   /**
    * GitHub Source: notification cursor and pending retries; per-Issue/PR read cursor shared by notification and polled reads;
    * per-stream cursor, start times by kind, and ETag; default-branch CI state; and per-PR CI fingerprint and revision (`revision`

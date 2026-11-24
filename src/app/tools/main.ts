@@ -4,13 +4,16 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
 import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
   from '../../core/index.ts'
+import { singleAnswerId } from '../../core/replies.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
+import { allowedSender } from '../../policy.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
 import { ticketCard } from '../cards.ts'
 import { PromptConfigSchema, savePrompts, type Prompts } from '../prompts.ts'
 import { readResource, type MainResourceHost, type ResourceHost } from '../resources.ts'
 import type { Sessions } from '../sessions.ts'
 import type { Settings } from '../settings.ts'
+import type { Schedules } from '../schedules.ts'
 import type { Store } from '../store.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
@@ -25,6 +28,7 @@ export interface MainToolsHost {
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
   readonly settings: Pick<Settings, 'view' | 'block' | 'save' | 'pause' | 'sync'>
   readonly assessor: Pick<MasterAssessor, 'context' | 'read' | 'decide'>
+  readonly schedules: Schedules
   readonly resources: ResourceHost
   /** Schedules a pass to carry out work queued by an Engine command (such as an Eval or ticket resume). */
   requestPass(): void
@@ -86,6 +90,7 @@ type Routed = { decision?: DecisionKind; reason: string; ticketId?: string | und
  * call's earlier items decided, with their batches.
  */
 function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string, string>): Routed | { refused: string } {
+  if (item.kind !== 'ignore' && host.schedules.blocksRouting(item.trigger_id)) return { refused: 'This trigger is for scheduling, not immediate work' }
   const note = item.note ? { note: item.note } : {}
   // A Trigger an earlier item decided went with that item's Decision, also as a member of its batch.
   // A stop of it for another ticket is the Engine's to judge.
@@ -158,6 +163,30 @@ export function mainTools(host: MainToolsHost, agent: Agent, privateRouter = fal
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
       false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
     routeTool(host),
+    ...privateRouter ? [
+      tool({
+        name: 'orchestrator_schedule_create',
+        description: 'Persist an explicitly requested future task from the current member message. Use only the current candidate ID, never a quote, past message, or inferred intent. The host sends any channel acknowledgement after saving; do not route an immediate ticket.',
+        schema: z.object({ trigger_id: z.string(), title: z.string().trim().min(1).max(200),
+          instructions: z.string().trim().min(1).max(8000).describe('Standalone instructions for the worker at each run, without the scheduling clause or unrelated/private conversation history.'),
+          run_at: z.iso.datetime({ offset: true }).describe('Future first run as an ISO-8601 timestamp with an explicit offset, e.g. 2026-12-01T09:00:00+08:00. Do not guess an unspecified time zone.'),
+          repeat: z.enum(['once', 'daily', 'weekly']).describe('Daily or weekly at the same fixed UTC offset as run_at; does not adjust for daylight saving time.'),
+        }).strict(),
+        execute: async ({ trigger_id, ...request }) => host.quietly(() => host.schedules.create(agent.id, trigger_id, request)),
+      }),
+      tool({
+        name: 'orchestrator_schedule_list',
+        description: 'List only this member’s active schedules on a current private request. Never use it on a Feishu group request.',
+        schema: z.object({ trigger_id: z.string() }).strict(),
+        execute: async ({ trigger_id }) => host.schedules.manage(agent.id, trigger_id),
+      }),
+      tool({
+        name: 'orchestrator_schedule_cancel',
+        description: 'Cancel future runs of one of this member’s schedules on explicit private request. List first if its ID is unknown. Existing tickets are not stopped.',
+        schema: z.object({ trigger_id: z.string(), schedule_id: z.string().regex(/^[a-f0-9]{32}$/) }).strict(),
+        execute: async ({ trigger_id, schedule_id }) => host.quietly(() => host.schedules.manage(agent.id, trigger_id, schedule_id)),
+      }),
+    ] : [],
     tool({
       name: 'orchestrator_ticket_retry',
       description: 'Start a new assignment on an explicit human request to retry a ticket whose worker reported failed or blocked, or whose input was not delivered; the stalled one ends.',
@@ -223,7 +252,8 @@ export function mainTools(host: MainToolsHost, agent: Agent, privateRouter = fal
     tool({
       name: 'orchestrator_reply',
       description: `Send an answer to a human question, a ready result, or attention requiring human action, as the replies section says; the gate refuses anything else, such as progress. purpose=result needs a ticket in person/review after a ready report, a completed or merged one, or a dropped one whose matched rule asks for a closing message. IM limit: ${IM_WORDS} words.`
-        + (privateRouter ? ' For a current private Weixin candidate, answer with its trigger_id and omit ticket_id. This replies directly and settles the candidate without opening a ticket.' : ''),
+        + ' For a current candidate with group_address, answer with its trigger_id and omit ticket_id to reply once without opening a ticket.'
+        + (privateRouter ? ' For a current private Weixin or QQ chat candidate, answer with its trigger_id and omit ticket_id. This replies directly and settles the candidate without opening a ticket.' : ''),
       schema: z.object({
         trigger_id: z.string().optional().describe('The original human question, for an answer only.'),
         ticket_id: z.string().optional(),
@@ -234,10 +264,21 @@ export function mainTools(host: MainToolsHost, agent: Agent, privateRouter = fal
       execute: async args => {
         const reply = host.store.atomic(() => {
           const id = args.trigger_id
-          if (privateRouter && args.purpose === 'answer' && id && !args.ticket_id && host.store.triggers.get(id)?.source === 'weixin') {
+          const trigger = id ? host.store.triggers.get(id) : undefined
+          if (args.purpose === 'answer' && trigger?.source === 'feishu' && trigger.meta.groupAddress && !args.ticket_id) {
+            if (!allowedSender(host.store.settings(), trigger.actor)) throw new UserError('notQuestion')
+            const replyId = singleAnswerId(trigger.id), status = host.store.replyStatus(replyId)
+            if (status) return { id: replyId, status }
+            const candidate = host.engine.candidate(trigger.id)
+            if (candidate?.strength !== 'explicit') throw new UserError('notQuestion')
+            const answer = host.engine.reply({ purpose: 'answer', triggerId: trigger.id, text: args.text, singleAnswer: true })
+            host.engine.decide(trigger.id, { kind: 'ignore', evalId: candidate.evalId, reason: 'Answered directly in the group' })
+            return answer
+          }
+          if (privateRouter && args.purpose === 'answer' && id && !args.ticket_id && ['weixin', 'personal'].includes(trigger?.source ?? '')) {
             const candidate = host.engine.candidate(id)
             if (candidate?.strength === 'explicit') {
-              host.engine.decide(id, { kind: 'ignore', evalId: candidate.evalId, reason: 'Answered directly in Weixin' })
+              host.engine.decide(id, { kind: 'ignore', evalId: candidate.evalId, reason: 'Answered directly to the member' })
             }
           }
           return host.engine.reply({ purpose: args.purpose, text: args.text, ...(id ? { triggerId: id } : {}),

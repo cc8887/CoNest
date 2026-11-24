@@ -33,6 +33,43 @@
 
 成员模式只开放带宿主检查的工单工具，拒绝继承的 shell、文件、子 Agent、全局设置工具；所有受该 Runtime 管理的 Session 都遵循该限制。`prepare` 等配置由平台操作者负责。底层仍使用上游 `danger-full-access` 权限预设，目录命名和命令包装不是 OS 沙箱。任意代码执行须后续单独设计隔离。
 
+成员模式中新建的受管理 Session 使用 `dsh-superagent-member` preset，包含时间上下文和压缩插件，角色工具由宿主注册到各自的 Agent。已经执行过的 Session 由 DSH 锁定原 preset，恢复时仍经过宿主工具限制和授权检查。个人空间的工单进度可显示当前 worker turn 的耗时，计时来自 DSH 会话事件，工单阶段来自 Store。
+
+## 离线渠道测试
+
+`pnpm test:offline` 包含飞书、微信和 QQ 的内存传输测试。飞书注入解码后的实时事件并捕获话题回复，微信注入账号收件批次并捕获发件参数，QQ 注入连接事件并捕获带原消息 ID 和序号的被动回复。三个替身都接到正式 Source，租户授权、Session 路由、定时任务、发件箱和 SQLite 沿用真实 Runtime。测试使用临时状态和合成账号，模型行为由测试预设。
+
+生产传输沿用飞书 CLI、微信 iLink 和 QQ Octop。渠道协议检查使用各自的测试，业务离线回归可以直接替换收发接口。
+
+## 飞书群聊主体识别
+
+飞书 Source 支持 `identityOnly: true`，用于单独验收群聊中的注册成员识别。由平台管理员读取 `/orchestrator/api/settings` 的飞书 Source `value` 和 `revision`，保留现有配置，在 `value.config` 加入 `identityOnly: true`，通过 `PUT /orchestrator/api/settings/source:feishu` 保存 `{ value, revision }`。配置受部署账户设置权限保护，保存后重启 Runtime。使用飞书自建应用的消息事件订阅，在 `chats` 中列出验证群并启用 `directMessages`。未启用 `groupSchedules` 时，飞书 Source 只做身份匹配，工单入口和投递停用。
+
+个人服务的以下接口沿用 `/t/<memberId>/api/` 的登录 Cookie 和 `X-Conest-Request: 1`。登录的成员需要在消息发送后回到发起配对的同一登录会话确认。
+
+| 方法和路径后缀 | 用途 |
+| --- | --- |
+| `POST feishu-binding` | 生成一条五分钟内有效的 `conest-bind` 私聊指令。成员将整条指令发给接收群消息的同一个机器人 |
+| `GET feishu-binding` | 查看配对进度、待确认的飞书发送者 ID 或绑定后的最近一次群聊匹配，分别以 `waiting`、`confirm` 和 `bound` 表示 |
+| `POST feishu-binding/confirm` | 确认来自已认证机器人私聊的账号归属 |
+| `DELETE feishu-binding` | 解绑并移除最近一次匹配记录。已确认过的账号归属仍保留 |
+
+宿主用飞书品牌、应用 ID 和平台事件的发送者 `open_id` 查询唯一的有效成员绑定。仅接受指定群里绑定后发出的实时人类消息，默认要求结构化 @。停用期间不记录匹配。配对指令只保留摘要，群聊匹配每位成员最多保留一条群 ID、消息 ID 和时间。只识别时，消息正文不进工单库或模型。[群聊主体识别调研](group-identity-research.md)
+
+在该模式上另开 `groupSchedules: true` 时，已验证且发给 Bot 的实时消息以独立私有候选进入发起成员的路由。群地址只用于保存后的固定确认，定时任务与到期工单保存在原 Store。时间推进和建工单在同一事务。用法见[成员定时任务](schedules.md)。
+
+### 智能寻址
+
+在高级控制台的飞书来源设置中，将指定群的「接收」设为「智能寻址」（`listen: smart`），并授予飞书应用读取群内全部消息的权限。经典飞书工单模式下，发起人须在飞书允许名单内。成员身份模式下须启用群定时任务并完成飞书绑定。
+
+宿主先选择消息中的第一个已知 Bot @，再核对回复引用的发送者、当前人同一话题中已送达的待答追问，以及开头直接呼叫的名称或别名。明确回复另一位成员，或只有 @ 其他人的消息，保持沉默。补收历史只处理结构化 @。同一原消息用飞书消息 ID 去重，回答也沿用发件箱的稳定回执。
+
+可在来源的高级设置填写 `groupModelProvider` 和 `groupModel`，留空时沿用已配置的评估模型。普通实时消息使用 DSH 的单次无工具模型调用，最多读取前面 8 条同群或同话题的消息。模型返回 `respond`、`confidence`、`reason` 和 `targetBotId`。最低置信度为 0.85，缺少模型、超时、输出无效或目标不符时保持沉默。路由完成后再次检查身份和配置。已有 Agent 决定直接回答还是受托执行，分类调用本身不启动 Agent 或创建工单。
+
+每个 Runtime 对应一个飞书应用。多 Bot 部署时，给各实例设置一致的 `groupBots` 应用 ID、名称和职责，并按各应用所见的 `openId` 配置平台映射。为每个智能群指定相同的 `autonomousBotId`。有可验证话题根消息时，根消息的 Bot 作者或首个 Bot @ 优先拥有该话题的无引用追问和语义判断。其他群内普通消息只由该群的指定 Bot 判断。模型选中其他 Bot 时保持沉默，跨实例不会转交语义结果。优先按明确 @、回复或名称选择某个 Bot。单 Bot 使用当前应用和名称即可，配置名单可以留空。
+
+规则优先级和按职责判断参考了 [Rakazo 的群聊路由说明](https://github.com/elie222/rakazo/blob/96b210e4a73047324603edbf6f59359f2a70e0bf/docs/groups.md) 和[群聊评估用例](https://github.com/elie222/rakazo/blob/96b210e4a73047324603edbf6f59359f2a70e0bf/packages/testkit/src/evals/group-routing.ts)。
+
 ## 微信与恢复
 
 微信 Source 默认加载；空成员目录时暂停轮询，网页绑定后动态激活对应账号。每个账号仅接受其已确认 owner 的完整文本私聊，拒绝陌生人和群。bot/owner/member 归属不可换人复用，旧单 owner 共享历史需新状态和 DSH profile 才能切入成员模式。停用保留历史归属。

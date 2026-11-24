@@ -12,6 +12,7 @@ import type { BindingPhase, BindingView, PersonalSpace, PersonalView } from './p
 import type { Members } from './members.ts'
 import type { Settings } from './settings.ts'
 import type { Store } from './store.ts'
+import type { Schedules } from './schedules.ts'
 import { personalTrigger } from '../sources/personal.ts'
 
 export interface BindingRecord { id: string; memberId: string; phase: BindingPhase; expiresAt: number; qr?: string; ticket?: string;
@@ -20,6 +21,8 @@ export interface PortalInvite { digest: string; expiresAt: number; epoch: number
 export interface PortalAccess { memberId: string; expiresAt: number; epoch: number }
 interface PortalHost { store: Store; members: Members; settings: Pick<Settings, 'enrollWeixin'>; stateDir: string; lifetime: AbortSignal;
   engine: Pick<EngineForPeople, 'stopTicket' | 'retryTicket'> & { attach(ticket: string, trigger: string): unknown };
+  schedules?: Pick<Schedules, 'list' | 'cancel'>;
+  workerTurnStartedAt(ticketId: string): number | undefined;
   receive(trigger: Trigger): ReceiveResult; requestPass(): void }
 const nonce = () => randomBytes(32).toString('base64url')
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -205,11 +208,20 @@ export class Portal {
     const member = this.view(id)
     const tickets = this.host.store.tickets.list().filter(ticket => this.host.members.canMemberTicket(id, ticket.id))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    const tasks = tickets.slice(offset, offset + limit).map(ticket => ({ id: ticket.id, title: ticket.title,
-      stage: (() => { const stage = ticketStage(ticket); return stage.stage === 'working' && stage.action === 'queued' ? 'queued' : stage.stage })(),
-      createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, summary: latestReport(ticket)?.summary ?? '',
-      ...ticket.attention ? { question: ticket.attention.question } : {}, ...ticket.ended ? { ended: ticket.ended.outcome } : {}, canStop: liveTicket(ticket), canRetry: canRetry(ticket) }))
-    return { member, tasks, total: tickets.length, nextOffset: offset + limit < tickets.length ? offset + limit : null }
+    const tasks = tickets.slice(offset, offset + limit).map(ticket => {
+      const state = ticketStage(ticket)
+      const stage = state.stage === 'working' && state.action === 'queued' ? 'queued' : state.stage
+      const started = stage === 'working' ? this.host.workerTurnStartedAt(ticket.id) : undefined
+      return { id: ticket.id, title: ticket.title, stage,
+        createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, summary: latestReport(ticket)?.summary ?? '',
+        ...(started === undefined ? {} : { turnElapsedMs: Math.max(0, this.now() - started) }),
+        ...ticket.attention ? { question: ticket.attention.question } : {}, ...ticket.ended ? { ended: ticket.ended.outcome } : {},
+        canStop: liveTicket(ticket), canRetry: canRetry(ticket) }
+    })
+    return { member, tasks, schedules: this.host.schedules?.list(id) ?? [], total: tickets.length, nextOffset: offset + limit < tickets.length ? offset + limit : null }
+  }
+  cancelSchedule(member: string, id: string): void {
+    if (!this.host.schedules?.cancel(member, id)) throw new PortalError(404, '定时任务不存在或无权访问')
   }
   action(member: string, ticket: string, action: 'stop' | 'retry'): void {
     if (!this.host.members.canMemberTicket(member, ticket)) throw new PortalError(404, '工单不存在或无权访问')
@@ -221,8 +233,8 @@ export class Portal {
     if (ticket && !this.host.members.canMemberTicket(member, ticket)) throw new PortalError(404, '工单不存在或无权访问')
     this.host.store.atomic(() => {
       const trigger = personalTrigger(member, requestId, text)
-      this.host.receive(trigger)
-      if (ticket) this.host.engine.attach(ticket, trigger.id)
+      const result = this.host.receive(trigger)
+      if (ticket && result !== 'duplicate') this.host.engine.attach(ticket, trigger.id)
     })
     this.host.requestPass()
   }

@@ -38,8 +38,8 @@ export interface SourceContext {
   readonly problem?: SetupProblem | undefined
   /** Returns a Source's configuration while enabled, or undefined while disabled or uninstalled. */
   config<C extends Record<string, unknown>>(kind: string): C | undefined
-  /** Ingests a trigger into the Engine and schedules the next evaluation pass; callers should await completion before advancing read cursors. */
-  receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
+  /** Receives a Trigger. Only direct delivery from the active platform connection may be marked live. */
+  receive(trigger: Trigger, origin?: 'live'): ReceiveResult | Promise<ReceiveResult>
   atomic<T>(work: () => T): T
   /** Source-scoped KV records (such as read cursors); setting `undefined` removes an entry. */
   state: { get<V>(key: Key<V>): V | undefined; set<V>(key: Key<V>, value: V | undefined): void; keys<V>(family: Family<V, never>): Key<V>[] }

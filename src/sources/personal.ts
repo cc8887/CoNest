@@ -3,10 +3,10 @@ import { z } from 'zod'
 import { key, type Trigger } from '../core/index.ts'
 import type { SourceKind } from './kind.ts'
 
-export function personalTrigger(memberId: string, requestId: string, text: string): Trigger {
-  const id = key('personal', memberId, requestId), thread = { source: 'personal', id }
+export function personalTrigger(memberId: string, requestId: string, text: string, groupAt?: string): Trigger {
+  const id = key(groupAt ? 'personal-group-schedule' : 'personal', memberId, requestId), thread = { source: 'personal', id }
   return { id, source: 'personal', actor: { source: 'personal', id: memberId }, human: true, addressed: 'direct',
-    at: new Date().toISOString(), text, threads: [thread], meta: { scope: 'dm', memberId },
+    at: groupAt ?? new Date().toISOString(), text, threads: [thread], meta: { scope: 'dm', memberId },
     channel: { source: 'personal', thread: `personal:${id}`, address: { scope: 'dm', memberId, conversationId: memberId, messageId: id } } }
 }
 
@@ -14,6 +14,8 @@ export function personalTrigger(memberId: string, requestId: string, text: strin
 export function personalKind(active: (id: string) => boolean): SourceKind {
   return { kind: 'personal', title: { zh: '个人网页', en: 'Personal web' }, description: { zh: '已登录成员的私有任务入口', en: 'Private tasks for authenticated members' },
     schema: z.object({}).strict(), fields: [], health: [],
+    /** Set by a trusted ingress adapter only after checking the referenced Trigger belongs to this same member. */
+    repliesTo: trigger => typeof trigger.meta.replyToTriggerId === 'string' ? trigger.meta.replyToTriggerId : undefined,
     scope: ({ meta }) => meta.scope === 'dm' && typeof meta.memberId === 'string' && active(meta.memberId)
       ? { listened: true, observed: false, row: 'direct' } : { listened: false, reason: 'private_member_required' },
     channel: { allowed: address => address.scope === 'dm' && active(address.memberId ?? ''),

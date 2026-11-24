@@ -16,6 +16,7 @@ export interface LinkHost {
   readonly sources: SourceRegistry
   readonly lifetime: AbortSignal
   visibleTicket?(trigger: Trigger, ticket: Ticket): boolean
+  groupSchedule?(triggerId: string): boolean
 }
 
 /** Resolves and caches a trigger's external message URL, falling back to a readable resource path when lookup fails. */
@@ -55,6 +56,8 @@ function referencedTickets(host: LinkHost, trigger: Trigger, known: readonly Tic
 /** Builds the main Session's candidate card with routing metadata, handback history, and related or referenced tickets. */
 export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const primary = candidate.triggers.at(-1)!
+  if (host.groupSchedule?.(primary.id)) return { ...triggerMessage(primary, {}), strength: candidate.strength, group_schedule: true,
+    next_action: 'Only process an explicit schedule creation request here; otherwise ignore. Only a host-generated confirmation goes to the group.' }
   const settings = host.store.settings()
   const delivered = host.store.triggers.disposition(primary.id)?.fanout ?? []
   const visible = (ticket: Ticket) => host.visibleTicket?.(primary, ticket) !== false
@@ -64,7 +67,11 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
     .map(item => ({ trigger_id: trigger.id, ticket_id: item.ticketId, reason: item.reason })))
   // Format the primary trigger like a worker input (including the message it replies to) and summarize earlier batch triggers as cards.
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
+  const qq = primary.meta.qq
+  const qqScope = primary.source === 'personal' && qq && typeof qq === 'object' && 'scope' in qq ? qq.scope : undefined
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
+    ...(primary.source === 'feishu' && primary.meta.groupAddress ? { group_address: primary.meta.groupAddress } : {}),
+    ...(qqScope === 'dm' || qqScope === 'group' ? { qq_scope: qqScope } : {}),
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
     ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets.filter(visible)),
     ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),

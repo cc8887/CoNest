@@ -14,6 +14,18 @@ import type { PersonalSpace } from '../src/app/portal-types.ts'
 let h: Host | undefined
 afterEach(async () => { if (h) await h.stop(); h = undefined })
 
+it('restricts the aggregate performance API to the same-origin operator session', async () => {
+  const f = await fixture(), path = 'api/performance?window=7d'
+  const { member, invite } = await f.create('性能访问测试')
+  const tenant = await f.login(member.id, invite)
+  expect((await h!.registration('GET', path, undefined, { authorization: '', cookie: tenant })).status).toBe(401)
+  expect((await h!.registration('GET', path, undefined, { origin: f.origin })).status).toBe(403)
+  expect((await h!.registration('GET', path, undefined, { 'x-orchestrator-request': '' })).status).toBe(403)
+  expect((await h!.registration('GET', 'api/performance?window=30d')).status).toBe(400)
+  expect(await h!.registration('GET', path)).toEqual({ status: 200, body: { window: '7d', groups: [] } })
+  expect((await f.call(member.id, 'performance', 'GET', undefined, tenant)).status).toBe(404)
+})
+
 async function fixture() {
   let qrCount = 0
   const states = new Map<number, string>(), override = new Map<number, number>(), pins: string[] = []
@@ -169,6 +181,7 @@ it('resumes a pending QR from the Store and does not enroll a member suspended b
   const attempt = runtime.portal.view(a.member.id).binding!.id
   await runtime.portal.stop()
   const resumed = new Portal({ store: runtime.store, members: runtime.members, settings: runtime.settings, stateDir: h!.directory,
+    workerTurnStartedAt: id => runtime.sessions.workerTurnStartedAt(id),
     lifetime: new AbortController().signal, engine: runtime.engine, receive: trigger => runtime.receive(trigger), requestPass: () => runtime.passes.request() }, f.client, { pollMs: 10 })
   try {
     resumed.resume()

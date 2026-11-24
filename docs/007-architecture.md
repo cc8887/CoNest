@@ -333,9 +333,16 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
 | `src/app/members.ts` | Durable identity pins, private router addresses, member grants, scoped reads and model-tool authorization |
+| `src/app/group-identity.ts` | Feishu account pairing and app-scoped matching of live group senders to registered members |
+| `src/app/qq-ingress.ts` | Opt-in QQ intake through Octop, authorized private member routing, and origin-bound reply delivery |
+| `src/app/feishu-group-routing.ts` | Feishu smart-group intake, scoped context, sender rechecks and delivery deduplication |
+| `src/app/group-address-model.ts` | A bounded, tool-free DSH stream for deciding who a group message addresses |
+| `src/app/schedules.ts` | Member-owned schedules, transactional due-ticket creation, and Feishu group confirmation checks |
 | `src/app/portal.ts` | Browser enrollment, private credential persistence, one-time access links, tenant sessions and scoped task operations |
 | `src/app/portal-types.ts` | Credential-free registration and personal-page contracts |
 | `src/app/portal-http.ts` | DSH-authenticated registration and a separate-origin personal HTTP server |
+| `src/app/performance.ts` | Retained timing samples from managed model streams, assignment queues and Weixin delivery |
+| `src/app/performance-types.ts` | Aggregate performance contract for the operator page |
 | `src/portal/index.tsx` | Standalone administrator enrollment and authenticated personal-space UI |
 | `src/portal/portal.css` | Responsive personal and operator page styling |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |
@@ -377,8 +384,10 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
-| `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
+| `src/sources/feishu-live.ts` | Feishu live event transport contract and production CLI process adapter |
+| `src/sources/feishu-loops.ts` | Feishu live event admission, history recovery, chat names and polling of subscribed topics |
 | `src/sources/feishu-channel.ts` | The Feishu Channel: topic replies, `sent` or `gone` |
+| `src/sources/octop-transport.ts` | Starts the local Octop process and correlates validated NDJSON messages and delivery receipts |
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
@@ -408,6 +417,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/family/authorize.ts` | Pure default-deny `authorize` for those records. The Runtime does not call it |
 | `src/family/index.ts` | Re-exports of that unwired family module |
 | `src/ingress/messages.ts` | Channel-instance message normalization, unique identity lookup, exact private reply routing and gateway-shaped mappings; group output remains denied |
+| `src/ingress/group-address.ts` | Group recipient selection from mentions, replies, pending questions, names and a validated semantic judgment |
 | `src/sources/weixin-api.ts` | Shared real iLink QR/PIN, poll and text-send transport for M0 and the registered Weixin Source |
 | `src/sources/weixin-account.ts` | Private host credential-file validation and exact account/owner matching |
 | `src/sources/weixin.ts` | Pinned Weixin accounts: independent polling, member message routing, atomic intake/cursor, original-account outbox and uncertain-send guards |
@@ -477,6 +487,14 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/multiuser-readiness.spec.ts` | Legacy single-owner compatibility and 100 Tickets from simulated Feishu requesters through the shared scheduler; not member isolation acceptance |
 | `tests/weixin-members.spec.ts` | Ten pinned Weixin members: private routers and reads, foreign-id refusal, Attention/followup/result routing, disabled members and 100 Tickets through one durable queue |
 | `tests/portal.spec.ts` | Web creation, QR/PIN enrollment, automatic allowlists, one-time login, tenant/auth boundaries and scoped web tasks |
+| `tests/offline-personal.spec.ts` | Personal HTTP tasks and private followups with messaging sources disabled, plus 100 tickets across ten tenants, one worker, same-database restart, request replay and isolated results |
+| `tests/offline-group-address.spec.ts` | Shared group address rules and model judgment using synthetic events and scripted model output |
+| `tests/offline-im.spec.ts` | Feishu, Weixin and QQ transport substitutes driving real Source admission, private routing, replay and outbox replies |
+| `tests/group-identity.spec.ts` | Live Feishu group sender matching for ten same-named members, identity proof, scope checks and revocation |
+| `tests/group-address.spec.ts` | Feishu group recipient priority, concurrent delivery, semantic silence, and direct replies through the Runtime |
+| `tests/octop-transport.spec.ts` | Octop IPC framing, account handshakes, isolated environment and delivery failure classification |
+| `tests/qq-ingress.spec.ts` | Real Octop with loopback QQ protocol fixtures, CoNest routing, private tickets and scoped replies |
+| `tests/performance.spec.ts` | Performance timing, failed attempts, deduplication, retention and per-model percentiles |
 | `tests/mock-http.spec.ts` | Native mock HTTP JSON decoding at every UTF-8 buffer boundary, preserving private Chinese reports |
 | `tests/container.spec.ts` | Private container profile setup, retained operator edits, state-path and model-endpoint guards |
 | `tests/m0-login.spec.ts` | Real QR listener capability and Host checks on loopback and explicit container listeners |

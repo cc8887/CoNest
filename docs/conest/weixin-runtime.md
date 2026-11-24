@@ -30,7 +30,22 @@ pnpm weixin:setup --web \
 
 每位成员在微信里有一个持续保留上下文的私有前台会话。问候、闲聊和能当场回答的简单问题直接发回微信。明确委托工作或要求交付成果时，前台发送接单回执，并将工单交给独立 worker 会话。后台运行时，可以继续在同一个私聊里对话。前台回复无需占用 worker，工单结果仍回到原账号。
 
-既有成员部署可在 DSH profile 的供应商模型列表中补上 `hy4-flash`，重启后在 CoNest 后台的「评估 → 研判模型」选择它。在「执行」中确认执行器模型为 `hy4`、并行 worker 数为 1。已有私有前台会话会在下一次模型请求使用已保存的研判设置，并保留对话历史。新部署也可以用 `--router-model` 和 `--model` 分别指定前台和执行模型。
+既有成员部署可在 DSH profile 的供应商模型列表中补上 `hy4-flash`，重启后在 CoNest 后台的「评估 → 研判模型」选择它。在「执行」中确认执行器模型为 `hy4`、并行 worker 数为 1。已有私有前台会话收到下一条消息时会应用已保存的研判设置，并保留对话历史。新部署也可以用 `--router-model` 和 `--model` 分别指定前台和执行模型。
+
+## 性能
+
+平台管理员在 CoNest 后台左侧进入「性能」。页面按会话角色和模型汇总最近 24 小时或 7 天的样本数、P50、P95 和有明确成功或失败结果的指标的失败率。
+
+| 指标 | 计时范围 |
+| --- | --- |
+| 微信问答响应 | CoNest 收到消息到微信接口确认首条直接答复。失败率的分母是已经排入发件箱并完成投递或被丢弃的直接答复。 |
+| 首 token | DSH 开始单次模型流到收到第一个正文、推理或工具调用片段。 |
+| 推理输出 | 主机收到首末推理片段之间的时间。模型没有返回推理片段时，这项没有样本。 |
+| 模型调用与重试 | DSH 开始单次模型流到其结束。同一步重新发起的流也计入模型重试，超时、错误、取消和额度用尽计作失败。 |
+| 前台与工单排队 | 微信消息入站到被前台模型步骤取用，以及工单进入调度到 worker 接手。 |
+| 微信投递与发送尝试 | 发件箱入队到微信确认或终止投递，包含退避。发送尝试另按每次通道调用计时，因此可看到后续成功的重试。 |
+
+问答响应是服务端到微信接口的时间，手机显示答复需要另行测量。P50 和 P95 采用最近秩法，已标记失败的耗时仅参与样本数和失败率。数据从升级后开始采集，超过 7 天的样本每小时清理一次。指标只保存时间、角色、模型、状态和必要的去重键，无聊天正文、提示词、推理文本或成员标识。
 
 ## 网页注册、扫码与个人空间
 
@@ -38,11 +53,13 @@ pnpm weixin:setup --web \
 
 1. 管理员打开启动日志中的带凭据管理地址，完成认证后直接进入 **CoNest 后台 → 成员与微信**。模型与执行等高级设置可通过侧栏“高级控制台”打开；其地址为 `/index.html`，仍要求管理员认证。
 2. 填写成员名称并创建。网页自动生成该成员的微信绑定二维码和一次性个人访问链接。
-3. 让对应成员用本人微信扫码，并在微信里确认。如要求 PIN，直接填绑定网页；也可先把个人访问链接交给成员，让其在自己的“微信连接”页完成扫码/PIN。
+3. 让对应成员用本人微信扫码，并在微信里确认。如要求 PIN，直接填绑定网页；也可先把个人访问链接交给成员，让其在自己的“渠道连接”页完成扫码/PIN。
 4. 状态变为“微信已绑定”后，凭证已自动私有保存，账号与成员关联、允许名单一并提交。无需导出文件、编辑配置或重启 Runtime。
 5. 将个人访问链接只交给对应成员。链接一天内有效、仅能使用一次；首次打开后由 HttpOnly Cookie 保持登录 30 天。链接使用后请收藏不含 `#invite` 的个人页面。换浏览器或退出后可由管理员生成新链接；新链接不撤销其他已有登录，停用成员会撤销全部登录。
 
 个人空间提供自己的任务列表、进度和结果、提交任务、回复追问、停止与重试。网页与微信共享成员身份、私有 router 和原有工单；所有成员共用一个 Engine、Store 与 worker 队列。一个 bot 仍只接受其扫码 owner 的文本私聊，不接陌生人或群。同一 bot/owner 不能关联到另一个成员；重新授权由平台管理员发起，失败时保留原绑定。
+
+绑定私聊和个人网页可用自然语言创建、查看自己的[定时任务](schedules.md)；飞书群需另外启用并绑定，不影响微信仅收私聊的边界。
 
 平台管理页路径为 `/orchestrator/registration/`，必须持有 DSH 签名浏览器会话；个人链接不能访问管理接口。成员停用后，已有网页登录、后续输入、工具和投递均会被拒绝，历史归属保留。管理页仅在本机使用。
 
@@ -69,12 +86,12 @@ pnpm weixin:setup --web \
 
 ## 安装与配置 DSH
 
-本次开发机验证使用 DSH CLI、kernel 与 pi-ai 的 `0.2.1-alpha.2`。上游旧安装说明中的 rc.3 不是本次验证版本。以下采用私有安装目录：
+当前源码的 DSH CLI、kernel 与 pi-ai 均固定为 `0.2.2-rc.5`。源码部署与容器构建共用 CLI 锁文件。
 
 ```sh
-npm install --prefix "$HOME/.local/share/conest/dsh-alpha" --ignore-scripts @deepseek-ai/dsh@0.2.1-alpha.2
+npm ci --prefix containers/dsh --ignore-scripts
 export DSH_HOME="$HOME/.local/share/conest/dsh-home"
-export PATH="$HOME/.local/share/conest/dsh-alpha/node_modules/.bin:$PATH"
+export PATH="$PWD/containers/dsh/node_modules/.bin:$PATH"
 dsh --profile conest --from-default-profile web --dump-config > /dev/null
 dsh plugin --profile conest add "link:$PWD"
 ```
@@ -94,7 +111,7 @@ dsh plugin --profile conest add "link:$PWD"
 ```sh
 umask 077
 node --env-file="$HOME/.config/conest/model-test.env" \
-  "$HOME/.local/share/conest/dsh-alpha/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+  "$PWD/containers/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" \
   --profile conest --no-open
 ```
 
@@ -110,7 +127,7 @@ node --env-file="$HOME/.config/conest/model-test.env" \
 
 验收使用 10 位成员、总计 100 个未完成任务且允许排队。实现由成员目录驱动，不限定为双用户。
 
-执行 `pnpm test:local-mock`。它使用已安装的 DSH CLI `0.2.1-alpha.2`，默认路径为 `~/.local/share/conest/dsh-alpha/node_modules/@deepseek-ai/dsh/lib/bin.js`；其他路径用 `CONEST_MOCK_DSH_BIN` 指定。需要项目支持的 Node 版本。该命令先构建，然后创建独立的临时 DSH profile、凭证文件、Session 和 SQLite 数据库，不使用已有微信或模型凭证，也不要求扫码。
+先执行 `npm ci --prefix containers/dsh --ignore-scripts`，再执行 `pnpm test:local-mock`。它默认从 `containers/dsh/node_modules` 加载锁定版本的 DSH CLI；其他路径用 `CONEST_MOCK_DSH_BIN` 指定。需要项目支持的 Node 版本。该命令先构建，然后创建独立的临时 DSH profile、凭证文件、Session 和 SQLite 数据库，不使用已有微信或模型凭证，也不要求扫码。
 
 测试启动真实本机 DSH CLI、Session、Agent Loop、pi-ai 和主 Runtime，保留原有 Store、Engine、Ticket、Attention、effects 与 outbox。默认先通过真实管理 HTTP 接口创建 10 个个人租户，模拟扫码确认，检查凭证私有保存、允许名单、一次性链接与跨租户登录拒绝；完成后运行 100 工单。仅在外部接口处替换输入：`tests/fixtures/weixin-offline-plugin.mjs` 通过文件模拟 iLink 收发，模型端是回环 HTTP 服务，按 OpenAI SSE 协议返回确定性的工具调用。这不是本轮真实 hy4 推理或手机收信证明。
 

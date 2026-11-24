@@ -29,9 +29,10 @@ import { decisionList, search, threadDetail, threadList } from './views/threads.
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 import { PORTAL_ADMIN_PATH, registrationHttp, registrationPage } from './portal-http.ts'
 import type { Portal } from './portal.ts'
+import type { PerformanceView, PerformanceWindow } from './performance-types.ts'
 
 export interface HttpHost {
-  readonly registration?: { portal: Portal; origin(): string | undefined }
+  readonly registration?: { portal: Portal; origin(): string | undefined; performance(window: PerformanceWindow): PerformanceView }
   readonly store: Store
   /** Feishu message links resolved since startup, used by search to match AppLink URLs. */
   readonly sourceLinks: Pick<TextCache, 'entries'>
@@ -75,9 +76,12 @@ async function readBody(req: IncomingMessage, maxBytes = 128 * 1024): Promise<un
 function json(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value))
 }
-export function sameOrigin(req: Pick<IncomingMessage, 'headers'>, port: number): boolean {
+function loopbackHost(host: string | undefined, port: number | undefined): boolean {
+  return port !== undefined && (host === `127.0.0.1:${port}` || host === `localhost:${port}`)
+}
+export function sameOrigin(req: Pick<IncomingMessage, 'headers'>, port: number | undefined): boolean {
   const host = req.headers.host
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false
+  if (!loopbackHost(host, port)) return false
   return req.headers['x-orchestrator-request'] === '1' && (req.headers.origin === undefined || req.headers.origin === `http://${host}`)
 }
 /** Maps errors to HTTP status codes and structured payloads that the panel localizes in the interface language. */
@@ -236,7 +240,7 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
   const disposers = [
     ...runtime.registration ? [ctx.webServer.register({ kind: 'exact', path: '/', handler: (req, res) => {
       const host = req.headers.host ?? ''
-      if (![`127.0.0.1:${ctx.webServer.port}`, `localhost:${ctx.webServer.port}`].includes(host)
+      if (!loopbackHost(host, ctx.webServer.port)
         || req.headers.origin && req.headers.origin !== `${ctx.webServer.protocol ?? 'http:'}//${host}`) {
         json(res, 403, { error: 'Loopback management host required' }); return
       }
@@ -251,10 +255,10 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
       const url = new URL(req.url ?? '/', 'http://localhost')
       const connection = ctx.get('connection') as { requestRejection(request: { headers: IncomingMessage['headers'] }): number | undefined } | undefined
       if (url.pathname === PORTAL_ADMIN_PATH || url.pathname.startsWith(PORTAL_ADMIN_PATH + '/')) {
-        if (![ `127.0.0.1:${ctx.webServer.port}`, `localhost:${ctx.webServer.port}` ].includes(req.headers.host ?? '')) { json(res, 403, { error: 'Loopback management host required' }); return }
+        if (!loopbackHost(req.headers.host, ctx.webServer.port)) { json(res, 403, { error: 'Loopback management host required' }); return }
         if (!runtime.registration) { json(res, 503, { error: '成员注册尚未就绪' }); return }
         await registrationHttp(req, res, runtime.registration.portal, runtime.registration.origin(),
-          () => connection ? connection.requestRejection(req) : 503, req.headers.host ?? '')
+          () => connection ? connection.requestRejection(req) : 503, req.headers.host ?? '', runtime.registration.performance)
         return
       }
       if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }

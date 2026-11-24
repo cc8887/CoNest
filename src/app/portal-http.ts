@@ -7,14 +7,16 @@ import { z } from 'zod'
 import type { Machine } from '../deployment.ts'
 import { isLoopbackHost, isWildcardHost } from '@deepseek-ai/dsh-host-webserver'
 import { Portal, PortalError } from './portal.ts'
+import type { GroupIdentity } from './group-identity.ts'
+import type { PerformanceView, PerformanceWindow } from './performance-types.ts'
 
 export const PORTAL_ADMIN_PATH = '/orchestrator/registration'
 const field = z.object({ displayName: z.string().trim().min(1).max(100) }).strict()
 const pin = z.object({ attempt: z.string().min(1).max(100), pin: z.string().regex(/^\d{4,16}$/) }).strict()
 const safeId = /^[A-Za-z0-9_-]{1,80}$/
 const script = () => readFileSync(new URL('./lib/portal.js', import.meta.resolve('dsh-superagent/package.json')), 'utf8')
-function html(mode: 'admin' | 'tenant', id?: string): string {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>CoNest · ${mode === 'admin' ? '成员与微信绑定' : '个人空间'}</title></head><body><div id="root"></div><script id="portal-boot" type="application/json">${JSON.stringify({ mode, id })}</script><script src="${mode === 'admin' ? PORTAL_ADMIN_PATH : ''}/assets/portal.js" defer></script></body></html>`
+function html(mode: 'admin' | 'tenant', id?: string, title = mode === 'admin' ? '成员与微信绑定' : '个人空间'): string {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>CoNest · ${title}</title></head><body><div id="root"></div><script id="portal-boot" type="application/json">${JSON.stringify({ mode, id })}</script><script src="${mode === 'admin' ? PORTAL_ADMIN_PATH : ''}/assets/portal.js" defer></script></body></html>`
 }
 function respond(res: ServerResponse, status: number, body: unknown, type = 'application/json; charset=utf-8', headers: Record<string, string> = {}): void {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
@@ -32,8 +34,8 @@ function failure(res: ServerResponse, error: unknown): void {
 }
 const idFrom = (value: string | undefined) => { if (!value || !safeId.test(value)) throw new PortalError(404, '页面不存在'); return value }
 /** Render the operator shell after the caller has authenticated the DSH browser session. */
-export function registrationPage(res: ServerResponse, head = false): void {
-  respond(res, 200, head ? '' : html('admin'), 'text/html; charset=utf-8')
+export function registrationPage(res: ServerResponse, head = false, page?: 'performance'): void {
+  respond(res, 200, head ? '' : html('admin', undefined, page === 'performance' ? '性能' : undefined), 'text/html; charset=utf-8')
 }
 const cookieName = (id: string) => `conest_${id}`
 function cookie(req: IncomingMessage, id: string): string | undefined {
@@ -46,7 +48,7 @@ function cookieHeader(id: string, token: string, maxAge: number, secure: boolean
 
 /** Platform route: requires the DSH operator session, not a tenant cookie or a guessed custom header. */
 export async function registrationHttp(req: IncomingMessage, res: ServerResponse, portal: Portal, origin: string | undefined,
-  authorized: () => number | undefined, expectedHost: string): Promise<void> {
+  authorized: () => number | undefined, expectedHost: string, performance: (window: PerformanceWindow) => PerformanceView): Promise<void> {
   try {
     const rejected = authorized()
     if (rejected) throw new PortalError(rejected, rejected === 503 ? '请在 DSH 网页管理端使用成员注册功能' : '请先登录 DSH 管理端')
@@ -54,8 +56,13 @@ export async function registrationHttp(req: IncomingMessage, res: ServerResponse
     if (req.headers.host !== expectedHost || req.headers.origin && req.headers.origin !== `http://${expectedHost}`)
       throw new PortalError(403, '不允许跨站管理操作')
     if (req.method === 'GET' && (path === '' || path === '/')) { registrationPage(res); return }
+    if (req.method === 'GET' && (path === '/performance' || path === '/performance/')) { registrationPage(res, false, 'performance'); return }
     if (req.method === 'GET' && path === '/assets/portal.js') { respond(res, 200, script(), 'application/javascript; charset=utf-8'); return }
     if (req.headers['x-orchestrator-request'] !== '1') throw new PortalError(403, '请从管理页面发起操作')
+    if (req.method === 'GET' && path === '/api/performance') {
+      const window = z.enum(['24h', '7d']).parse(url.searchParams.get('window') ?? '24h')
+      respond(res, 200, performance(window)); return
+    }
     const pieces = path.split('/').filter(Boolean), method = req.method
     if (pieces[0] !== 'api' || pieces[1] !== 'members') throw new PortalError(404, '页面不存在')
     if (pieces.length === 2) {
@@ -84,7 +91,7 @@ export async function registrationHttp(req: IncomingMessage, res: ServerResponse
 export class PortalServer {
   private server?: Server
   private publicOrigin?: string
-  constructor(private readonly portal: Portal, private readonly config: NonNullable<Machine['portal']>) {}
+  constructor(private readonly portal: Portal, private readonly config: NonNullable<Machine['portal']>, private readonly groupIdentity?: GroupIdentity) {}
   get origin(): string | undefined { return this.publicOrigin }
   async start(): Promise<void> {
     const { host, port, origin, certFile, keyFile } = this.config
@@ -120,6 +127,16 @@ export class PortalServer {
       respond(res, 200, { ok: true }, undefined, { 'set-cookie': cookieHeader(id, access.token, access.maxAge, origin.startsWith('https:')) }); return
     }
     this.portal.authenticate(id, token)
+    if (action === 'feishu-binding' && this.groupIdentity) {
+      if (parts.length === 4) {
+        if (method === 'GET') { respond(res, 200, this.groupIdentity.status(id, token!)); return }
+        if (method === 'POST') { respond(res, 201, this.groupIdentity.start(id, token!)); return }
+        if (method === 'DELETE') { this.groupIdentity.revoke(id); respond(res, 200, { ok: true }); return }
+      }
+      if (method === 'POST' && parts.length === 5 && parts[4] === 'confirm') {
+        respond(res, 200, this.groupIdentity.confirm(id, token!)); return
+      }
+    }
     if (method === 'POST' && action === 'tasks' && parts.length === 4) {
       const value = z.object({ requestId: z.string().min(1).max(100), text: z.string().trim().min(1).max(8000), ticketId: z.string().optional() }).strict().parse(await body(req, 32768))
       this.portal.submit(id, value.requestId, value.text, value.ticketId); respond(res, 202, { queued: true }); return
@@ -135,6 +152,9 @@ export class PortalServer {
     }
     if (method === 'POST' && parts.length === 6 && action === 'tasks' && ['stop', 'retry'].includes(parts[5]!)) {
       this.portal.action(id, idFrom(parts[4]), parts[5] as 'stop' | 'retry'); respond(res, 200, { ok: true }); return
+    }
+    if (method === 'POST' && parts.length === 6 && action === 'schedules' && parts[5] === 'cancel') {
+      this.portal.cancelSchedule(id, idFrom(parts[4])); respond(res, 200, { ok: true }); return
     }
     throw new PortalError(404, '页面不存在')
   }

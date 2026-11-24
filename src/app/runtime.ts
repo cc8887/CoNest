@@ -32,13 +32,14 @@ import { Prompts } from './prompts.ts'
 import { registerHttp, type HttpHost } from './http.ts'
 import type { LinkTarget } from './views/records.ts'
 import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
+import { PerformanceMetrics } from './performance.ts'
 import { eventNotice, followupNotice } from './notices.ts'
 import { pullEndNotices } from '../sources/github-pull.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
-import { feishuSettings } from '../sources/feishu.ts'
+import { feishuSettings, type FeishuConfig } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
@@ -47,11 +48,16 @@ import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
 import { Members } from './members.ts'
+import { GroupIdentity, isFeishuPairingMessage } from './group-identity.ts'
+import { FeishuGroupRouting } from './feishu-group-routing.ts'
 import { Portal } from './portal.ts'
 import { PortalServer } from './portal-http.ts'
 import type { WeixinClient } from '../sources/weixin-api.ts'
-import { personalKind } from '../sources/personal.ts'
+import { personalKind, personalTrigger } from '../sources/personal.ts'
 import { WeixinConfigSchema } from '../sources/weixin-config.ts'
+import { Schedules, groupScheduleAck } from './schedules.ts'
+import { QqIngress, qqLaunch, type QqConfig } from './qq-ingress.ts'
+import { OctopTransport, type OctopTransportOptions, type QqTransportFactory } from '../sources/octop-transport.ts'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -74,6 +80,7 @@ export class Runtime extends Service implements SourceHost {
   readonly executor: DshExecutor
   readonly assessor: MasterAssessor
   readonly outbox: Outbox
+  readonly performance: PerformanceMetrics
   readonly engine: Engine
   readonly passes: Passes
   readonly ready: Promise<void>
@@ -90,10 +97,13 @@ export class Runtime extends Service implements SourceHost {
   private closingFlag = false
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
+  private readonly qqRunning?: Promise<void>
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void, adapters: { weixin?: WeixinClient; bindingPollMs?: number } = {}) {
+  constructor(ctx: Context, readonly machine: Machine, restart: () => void, adapters: {
+    weixin?: WeixinClient; bindingPollMs?: number; qq?: Omit<OctopTransportOptions, 'accountId'>; qqTransport?: QqTransportFactory
+  } = {}) {
     super(ctx, 'orchestrator')
     const runtime = this
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
@@ -105,6 +115,7 @@ export class Runtime extends Service implements SourceHost {
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
+      const performance = this.performance = new PerformanceMetrics(store, () => ctx.logger.warn('CoNest could not record performance metrics'))
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
@@ -122,15 +133,21 @@ export class Runtime extends Service implements SourceHost {
           .catch(() => { /* sync() records its failure in health. */ })
         return () => {}
       })
+      const groupIdentity = new GroupIdentity(store, members, () => {
+        const source = sources.instance<FeishuConfig>('feishu')
+        const bot = setup.configured() ? setup.deployment.feishu : undefined
+        return source?.enabled && source.config.identityOnly && bot ? { bot, config: source.config } : undefined
+      })
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime,
-        visibleTicket: (trigger, ticket) => members.sameOwner(trigger, ticket) }
+        visibleTicket: (trigger, ticket) => members.sameOwner(trigger, ticket),
+        groupSchedule: id => !!store.get(KV.schedules.group(id)) }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx, members,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
-        lifetime: this.lifetime, members, routerCwd: machine.stateDir,
+        lifetime: this.lifetime, members, routerCwd: machine.stateDir, performance,
         closing: () => this.closing(), environment,
         tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket)
           : mainTools({ ...this.toolHost, resources: { ...resources, masterId: agent.id } }, agent, members.isRouter(agent.id)) })
@@ -147,7 +164,23 @@ export class Runtime extends Service implements SourceHost {
         visibleTicket: (trigger, ticket) => members.sameOwner(trigger, ticket),
         deliver: async (id, text) => { const target = members.target(JSON.parse(text)); if (target) await sessions.prompt(target, id, text, 'steer') },
         candidateCard: candidate => candidateCard(links, candidate) })
-      const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused() })
+      const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused(), performance: {
+        label: message => {
+          const ticket = message.ticketId ? store.tickets.get(message.ticketId) : undefined
+          const worker = ticket && message.kind === 'reply'
+          const triggerId = message.answerTo?.triggerId ?? ticket?.origin.triggerId
+          const id = worker ? workerSessionId(ticket.id) : triggerId ? members.targetTrigger(triggerId) : masterId
+          const actual = id ? ctx.agents.get(id as SessionId)?.session.requestHeader()?.config.model : undefined
+          return { role: worker ? 'worker' : 'foreground', model: actual || 'unknown' }
+        },
+        record: (label, samples, at) => performance.record(label, samples, at),
+      }, allowed: message => {
+        const request = message.channel.address.scheduleRequest
+        if (!request || message.channel.source !== 'feishu') return true
+        const origin = store.get(KV.schedules.group(request))
+        return !!origin && message.id === groupScheduleAck(request) && origin.channel.address.chatId === message.channel.address.chatId
+          && origin.channel.address.messageId === message.channel.address.messageId && groupIdentity.scheduleAllowed(origin)
+      } })
       const { assessor, executor } = this
       const policy = () => settingsPolicy(store.settings(), sources)
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
@@ -169,21 +202,78 @@ export class Runtime extends Service implements SourceHost {
         } })
       // Update the `evals` health entry on every pass if an evaluation failed as unavailable within the last hour.
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
-      const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
-      const passes = this.passes = new Passes({ engine: { receive: trigger => store.atomic(() => { members.claim(trigger); return engine.receive(trigger) }), evaluateDue }, effects,
+      const schedules = new Schedules({ store, members, engine, sources, groupAllowed: origin => groupIdentity.scheduleAllowed(origin),
+        send: message => outbox.send(message), report })
+      const evaluateDue = () => { if (!this.paused()) schedules.due(); engine.evaluateDue(); evals.set(evalsHealth(store)) }
+      const passes = this.passes = new Passes({ engine: { receive: trigger => store.atomic(() => {
+        if (trigger.source === 'feishu' && (store.settings().sources.feishu?.config.identityOnly === true || isFeishuPairingMessage(trigger))) return 'filtered'
+        members.claim(trigger)
+        return engine.receive(trigger)
+      }), evaluateDue }, effects,
         health: this.runtimeHealth, lifetime: this.lifetime, configured: () => setup.configured(), closing: () => this.closing() })
+      const groupRouting = new FeishuGroupRouting(store, commands, ctx.llm, this.lifetime)
+      const receiveFeishu = (trigger: Trigger, live: boolean) => {
+        if (!live) return passes.receive(trigger)
+        return store.atomic(() => {
+          const memberId = groupIdentity.observe(trigger)
+          const group = memberId && groupIdentity.scheduleOrigin(memberId, trigger)
+          if (!group || !allowedSender(store.settings(), { source: 'personal', id: group.memberId })) return passes.receive(trigger)
+          const request = personalTrigger(group.memberId, trigger.id, trigger.text.slice(0, 8000), trigger.at)
+          if (!sources.scope(request).listened) return 'filtered'
+          if (store.triggers.get(request.id)) return 'duplicate'
+          store.set(KV.schedules.group(request.id), group)
+          return passes.receive(request)
+        })
+      }
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
-        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
+        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
+        receive: (trigger, origin) => {
+          if (trigger.source !== 'feishu') return passes.receive(trigger)
+          if (this.closing()) return 'filtered'
+          const live = origin === 'live', instance = sources.instance<FeishuConfig>('feishu')
+          const config = instance?.config, chat = config?.chats.find(chat => chat.listen === 'smart' && chat.chatId === trigger.meta.chatId)
+          if (!chat || !config || trigger.meta.direct !== false) return receiveFeishu(trigger, live)
+          if (!instance.enabled || !setup.configured() || !setup.deployment.feishu) return 'filtered'
+          const revision = store.blockRevision('source:feishu')
+          const memberId = config.identityOnly ? groupIdentity.groupMember(trigger) : undefined
+          const authorized = () => {
+            if (this.closing() || store.blockRevision('source:feishu') !== revision || !sources.kind('feishu')) return false
+            const settings = store.settings()
+            if (!config.identityOnly) return !!allowedSender(settings, trigger.actor)
+            if (!live) return false
+            return !!memberId && memberId === groupIdentity.groupMember(trigger) && (trigger.addressed === 'mention' || config.groupSchedules === true
+              && !!allowedSender(settings, { source: 'personal', id: memberId }))
+          }
+          return groupRouting.receive(trigger, live, config, chat, setup.deployment.feishu, store.settings().eval.model,
+            authorized, addressed => receiveFeishu(addressed, live), memberId ? personalTrigger(memberId, trigger.id, '', trigger.at).id : trigger.id)
+        } }
+      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources, schedules,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
-      this.portal = new Portal({ store, members, settings: this.settings, stateDir: machine.stateDir, engine, lifetime: this.lifetime,
+      this.portal = new Portal({ store, members, settings: this.settings, stateDir: machine.stateDir, engine, schedules, lifetime: this.lifetime,
+        workerTurnStartedAt: id => sessions.workerTurnStartedAt(id),
         receive: trigger => passes.receive(trigger), requestPass: () => passes.request() }, adapters.weixin, { pollMs: adapters.bindingPollMs })
       if (machine.portal) {
         this.disposers.push(sources.register(personalKind(id => !!WeixinConfigSchema.parse(store.settings().sources.weixin?.config ?? {}).members?.some(member => member.id === id && member.status === 'active'))))
-        this.portalServer = new PortalServer(this.portal, machine.portal)
+        this.portalServer = new PortalServer(this.portal, machine.portal, groupIdentity)
+      }
+      const qqOptions = machine.portal && (adapters.qq ?? qqLaunch())
+      const qqTransport = machine.portal && (adapters.qqTransport ?? (qqOptions
+        ? (accountId: string) => new OctopTransport({ ...qqOptions, accountId }) : undefined))
+      if (qqTransport) {
+        const qq = new QqIngress({ store, members, llm: ctx.llm, receive: trigger => passes.receive(trigger), send: message => outbox.send(message),
+          config: () => {
+            const source = sources.instance<QqConfig>('qq')
+            return source?.enabled ? source.config : undefined
+          }, personalEnabled: () => store.settings().sources.personal?.enabled === true && sources.instance('personal')?.enabled === true })
+        this.disposers.push(sources.register(qq.kind))
+        const report = this.context(qq.kind).report
+        this.qqRunning = Promise.resolve().then(async () => {
+          await this.ready
+          if (setup.configured() && !this.lifetime.aborted) await qq.run(qqTransport, this.lifetime, value => report('qq', value))
+        }).catch(() => { if (!this.lifetime.aborted) report('qq', { state: 'error', detail: 'QQ could not start' }) })
       }
       this.ready = this.initialize()
     } catch (error) {
@@ -213,7 +303,12 @@ export class Runtime extends Service implements SourceHost {
     return ticketEnvironment({ deployment, sources, settings: this.store.settings(), ticket, ...trigger ? { trigger } : {} })
   }
   checkSetup(): void { this.setup.check() }
-  receive(trigger: Trigger): ReceiveResult { return this.passes.receive(trigger) }
+  receive(trigger: Trigger): ReceiveResult {
+    // Smart groups take input only through their authenticated Source context.
+    if (trigger.source === 'feishu' && trigger.meta.direct === false && feishuSettings(this.sources).chats
+      .some(chat => chat.listen === 'smart' && chat.chatId === trigger.meta.chatId)) return 'filtered'
+    return this.passes.receive(trigger)
+  }
   idle(): Promise<void> { return this.passes.idle() }
   pump(): Promise<void> { return this.passes.pump() }
   sendReplies(): Promise<void> { return this.outbox.sent() }
@@ -222,7 +317,7 @@ export class Runtime extends Service implements SourceHost {
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
   private async initialize(): Promise<void> {
     // Install the product landing route before yielding, so browser handoff cannot fall through to the DSH index.
-    this.disposers.push(registerHttp(this.ctx, this.httpHost()))
+    this.disposers.push(registerHttp(this.ctx, this.httpHost()), this.performance.startRetention())
     await this.portalServer?.start()
     this.portal.resume()
     if (!await this.setup.run(this.store.settings())) {
@@ -245,7 +340,7 @@ export class Runtime extends Service implements SourceHost {
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, sourceLinks,
       get ready() { return runtime.ready },
-      registration: { portal: this.portal, origin: () => this.portalServer?.origin },
+      registration: { portal: this.portal, origin: () => this.portalServer?.origin, performance: window => this.performance.view(window) },
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
@@ -257,7 +352,7 @@ export class Runtime extends Service implements SourceHost {
     this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
     try {
       this.assessor.stop()
-      await Promise.allSettled([this.portal.stop(), this.portalServer?.stop()])
+      await Promise.allSettled([this.portal.stop(), this.portalServer?.stop(), this.qqRunning])
       const ids = [this.masterId, ...this.members.routers(), ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
       const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })

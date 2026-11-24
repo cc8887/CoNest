@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, symlinkSync, renameSync, rmSync } from 'node:fs'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -12,10 +12,11 @@ import { readModelRequest } from './mock-http.mjs'
 
 process.umask(0o077)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const dsh = process.env.CONEST_MOCK_DSH_BIN || join(homedir(), '.local/share/conest/dsh-alpha/node_modules/@deepseek-ai/dsh/lib/bin.js')
-assert(existsSync(dsh), 'Set CONEST_MOCK_DSH_BIN to an installed DSH 0.2.1-alpha.2 lib/bin.js')
+const dsh = process.env.CONEST_MOCK_DSH_BIN || join(repo, 'containers/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
+const pinnedDsh = JSON.parse(readFileSync(join(repo, 'containers/dsh/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+assert(existsSync(dsh), `Run npm ci --prefix containers/dsh --ignore-scripts or set CONEST_MOCK_DSH_BIN to DSH ${pinnedDsh} lib/bin.js`)
 const dshVersion = JSON.parse(readFileSync(resolve(dirname(dsh), '../package.json'), 'utf8')).version
-assert.equal(dshVersion, '0.2.1-alpha.2', 'Use the pinned DSH version for this fixture')
+assert.equal(dshVersion, pinnedDsh, 'Use the pinned DSH version for this fixture')
 assert(existsSync(join(repo, 'lib/weixin-watch.js')), 'Run pnpm build first')
 const root = mkdtempSync(join(tmpdir(), 'conest-offline-runtime-'))
 const webEnrollment = process.env.CONEST_MOCK_WEB_ENROLLMENT !== '0'
@@ -46,6 +47,15 @@ if (!webEnrollment) writeFileSync(directoryFile, JSON.stringify({ members: users
     return { credentialsFile, memberId: `member-${index}`, accountId: account.id, ownerId: account.ownerId }
   }) }))
 const requests = [], calls = [], routed = new Set(), replied = new Set()
+const routerTools = [
+  'orchestrator_read', 'orchestrator_route', 'orchestrator_schedule_create', 'orchestrator_schedule_list',
+  'orchestrator_schedule_cancel', 'orchestrator_ticket_retry', 'orchestrator_ticket_request_status',
+  'orchestrator_ticket_note', 'orchestrator_trigger_requeue', 'orchestrator_reply', 'orchestrator_thread_unsubscribe',
+].sort()
+const workerTools = [
+  'orchestrator_read', 'orchestrator_ack', 'orchestrator_thread_unrelated', 'orchestrator_thread_follow',
+  'orchestrator_trigger_handback', 'orchestrator_report',
+].sort()
 const questionTickets = new Map(), holds = new Set()
 let holdWorkers = true, heldMember, attemptedForeignRead = false, modelError
 let processHandle, processExit, runtimeLog = '', origin, token, operatorCookie = ''
@@ -75,7 +85,8 @@ const model = createServer(async (req, res) => {
     for (let other = 0; other < users.length; other++) if (other !== member) {
       assert(!content.includes(users[other]) && !content.includes(accounts[other].id), 'Another member identity reached this model request')
     }
-    assert(!body.tools.some(tool => ['bash', 'read', 'orchestrator_settings_save', 'orchestrator_prompts_save'].includes(tool.function?.name)), 'A member received host/admin tools')
+    assert.deepEqual(body.tools.map(tool => tool.function?.name).sort(), isWorker ? workerTools : routerTools,
+      'Final model request contained an unexpected tool set')
     const cards = messages.filter(item => item.role === 'user').flatMap(item => {
       try { return [JSON.parse(textOf(item.content))] } catch { return [] }
     })
@@ -132,7 +143,14 @@ const model = createServer(async (req, res) => {
       created: 1, choices: [{ index: 0, ...choice }] })}\n\n`)
     if (call) {
       calls.push(call)
-      emit({ delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${calls.length}`, type: 'function',
+      const callNumber = calls.length
+      if (call.name === 'orchestrator_reply' && call.args.purpose === 'answer') {
+        emit({ delta: { role: 'assistant', reasoning_content: 'PRIVATE_SYNTHETIC_REASONING' }, finish_reason: null })
+        await delay(8)
+        emit({ delta: { reasoning_content: 'PRIVATE_SYNTHETIC_REASONING_END' }, finish_reason: null })
+        await delay(8)
+      }
+      emit({ delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${callNumber}`, type: 'function',
         function: { name: call.name, arguments: JSON.stringify(call.args) } }] }, finish_reason: null })
       emit({ delta: {}, finish_reason: 'tool_calls' })
     } else {
@@ -245,8 +263,9 @@ try {
     assert.equal((await registration('', 'GET', undefined, false)).status, 401)
     console.log('10 tenants created and QR-confirmed through the web API; credentials and allowlists saved automatically')
   }
-  publish('hundred-tasks', member => [...Array.from({ length: 10 }, (_, task) => message(member, `task-${task}`,
-    `MOCK_PRIVATE_${member} MOCK_TASK_${member}_${task}：请创建独立工单生成清单。`)), message(member, 'intruder', `MOCK_INTRUDER_${member}`, users[(member + 1) % users.length])])
+  const taskMessages = member => Array.from({ length: 10 }, (_, task) => message(member, `task-${task}`,
+    `MOCK_PRIVATE_${member} MOCK_TASK_${member}_${task}：请创建独立工单生成清单。`))
+  publish('hundred-tasks', member => [...taskMessages(member), message(member, 'intruder', `MOCK_INTRUDER_${member}`, users[(member + 1) % users.length])])
   const original = await until(async () => { const page = await api('tickets?state=open&limit=1000'); return page.items.length === 100 && page }, '100 Tickets accepted')
   assert.deepEqual((await api('state')).load, { running: 1, queued: 99, maxWorkers: 1 })
   console.log('100 real Tickets admitted: 1 worker running, 99 queued')
@@ -257,6 +276,13 @@ try {
   assert.deepEqual((await api('state')).load, { running: 1, queued: 99, maxWorkers: 1 })
   await until(() => holds.size === 1, 'worker model stream held open after restart')
   const chattingMember = heldMember
+  if (webEnrollment) {
+    const own = (await tenant(chattingMember, 'state')).body.tasks
+    const other = (await tenant((chattingMember + 1) % users.length, 'state')).body.tasks
+    assert.equal(own.filter(task => task.stage === 'working' && task.turnElapsedMs >= 0).length, 1)
+    assert.equal(own.filter(task => task.stage === 'queued' && task.turnElapsedMs === undefined).length, 9)
+    assert(other.every(task => task.stage === 'queued' && task.turnElapsedMs === undefined))
+  }
   const chatPrompts = ['你好，今天有点想聊天。', '西瓜和蜜瓜，夏天你更喜欢哪个？', '你刚才推荐的是哪一个？']
   for (const [index, text] of chatPrompts.entries()) {
     const turn = index + 1
@@ -302,13 +328,61 @@ try {
   const restored = await api('tickets?state=ended&limit=1000')
   assert.equal(restored.items.length, 100)
   assert.deepEqual(new Set(restored.items.map(item => item.id)), new Set(tickets.items.map(item => item.id)))
-  await delay(800)
+  const callsBeforeReplay = requests.length
+  const runtimeDb = new DatabaseSync(join(root, 'runtime/orchestrator.sqlite'), { readOnly: true })
+  try {
+    const cursor = runtimeDb.prepare('SELECT value FROM kv WHERE key = ?')
+    const triggers = runtimeDb.prepare('SELECT count(*) AS total FROM trigger')
+    const countBeforeReplay = triggers.get().total
+    publish('replayed-tasks', taskMessages)
+    await until(() => accounts.every(account => cursor.get(`weixin-cursor:${account.id}`)?.value === '"replayed-tasks"'), 'Weixin replay cursors committed')
+    assert.equal(triggers.get().total, countBeforeReplay, 'Replay added another Trigger')
+  } finally { runtimeDb.close() }
+  assert.equal(requests.length, callsBeforeReplay, 'Replay reached the model again')
   assert.equal(sent().length, deliveries, 'Restart duplicated a completed delivery')
+  assert.equal((await api('tickets?state=ended&limit=1000')).items.length, 100)
+  assert.equal((await api('tickets?state=open&limit=1000')).items.length, 0)
+  const performancePath = '/orchestrator/registration/api/performance'
+  const performanceHeaders = { 'x-orchestrator-request': '1', cookie: operatorCookie }
+  const unauthenticated = await fetch(origin + performancePath, { headers: { 'x-orchestrator-request': '1' } })
+  assert.equal(unauthenticated.status, 401, 'Performance endpoint accepted unauthenticated traffic')
+  const page = await fetch(origin + '/orchestrator/registration/performance', { headers: { cookie: operatorCookie } })
+  assert.equal(page.status, 200)
+  assert((await page.text()).includes('<title>CoNest · 性能</title>'))
+  const performance = {}
+  for (const window of ['24h', '7d']) {
+    const response = await fetch(`${origin}${performancePath}?window=${window}`, { headers: performanceHeaders })
+    assert.equal(response.status, 200)
+    const view = await response.json()
+    assert.equal(view.window, window)
+    assert(!JSON.stringify(view).includes('PRIVATE_SYNTHETIC_REASONING'))
+    const metric = (role, model, name) => view.groups.find(group => group.role === role && group.model === model)?.metrics.find(item => item.metric === name)
+    const foreground = name => metric('foreground', 'hy4-flash', name)
+    const worker = name => metric('worker', 'hy4', name)
+    assert.equal(foreground('wechat_answer')?.samples, 3)
+    assert.equal(foreground('wechat_answer')?.failures, 0)
+    assert(foreground('wechat_answer')?.p95Ms >= foreground('wechat_answer')?.p50Ms)
+    assert(foreground('foreground_queue')?.samples >= 103)
+    assert(foreground('wechat_delivery')?.samples >= 103)
+    assert(foreground('wechat_send')?.samples >= 103)
+    assert(foreground('model_call')?.samples >= 103)
+    assert(foreground('first_token')?.samples >= 103)
+    assert.equal(foreground('reasoning')?.samples, 3)
+    assert(foreground('reasoning')?.p50Ms > 0)
+    assert(worker('worker_queue')?.samples >= 100)
+    assert(worker('model_call')?.samples >= 100)
+    assert(worker('wechat_delivery')?.samples >= 100)
+    performance[window] = view.groups
+  }
+  console.log('Operator-only performance page returned both windows and recorded model, queue, and delivery metrics')
   await stop()
   const db = new DatabaseSync(join(root, 'runtime/orchestrator.sqlite'))
+  const metricStorage = JSON.stringify(db.prepare('SELECT * FROM performance_sample').all())
+  assert(!metricStorage.includes('PRIVATE_SYNTHETIC_REASONING') && !metricStorage.includes('MOCK_CHAT'))
   const routers = db.prepare("SELECT value FROM kv WHERE key LIKE 'member-router:%'").all().map(row => JSON.parse(row.value))
   const storedTickets = db.prepare('SELECT value FROM ticket').all().map(row => JSON.parse(row.value))
   const receipts = db.prepare('SELECT value FROM outbox').all().map(row => JSON.parse(row.value))
+  assert(receipts.every(receipt => !receipt.timing && !receipt.answerTo), 'Settled receipts retained performance correlation data')
   const triggerById = db.prepare('SELECT value FROM trigger WHERE id = ?')
   for (const ticket of storedTickets) {
     const trigger = JSON.parse(triggerById.get(ticket.origin.triggerId).value)
@@ -333,7 +407,10 @@ try {
     admittedUsers: users.length, privateRouters: new Set(routers).size, tickets: tickets.items.length,
     queuedRestart: { running: 1, queued: 99, maxWorkers: 1 }, foreignRead: 'rejected by real DSH tool execution',
     privateModelContexts: 'one member per request; checked on every model call', attentionFollowupResult: '10 passed',
+    scopedTools: { router: routerTools, worker: workerTools, checkedBeforeAndAfterRestart: true },
+    privateTurnProgress: webEnrollment ? 'held worker visible only to its owner; queued tasks have no turn time' : 'web enrollment disabled',
     foregroundChat: { turns: chatPrompts.length, routerModel: 'hy4-flash', workerModel: 'hy4', extraTickets: 0 },
+    performance,
     replayAndCompletedRestart: 'passed', reportToOriginAndReceipt: '100 matched', deliveries, modelRequests: requests.length, toolCalls: calls.length,
     multiuserAcceptance: 'PASSED: 10 members, 100 Tickets, one shared queue, private contexts and original-account result delivery' }
   const output = resolve(process.env.CONEST_MOCK_REPORT || join(repo, '.artifacts/mock-runtime-report.json'))

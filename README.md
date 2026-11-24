@@ -1,6 +1,6 @@
 # CoNest 共栖
 
-开发中。已提供网页成员注册、微信扫码自动绑定、独立个人空间、私有路由 Session、工单权限隔离和共享队列；家庭共享等能力仍在开发，也不是 DeepSeek 或腾讯的官方产品。
+开发中。已提供网页成员注册、微信扫码自动绑定、独立个人空间、私有路由 Session、工单权限隔离、共享队列和成员定时任务；家庭共享等能力仍在开发，也不是 DeepSeek 或腾讯的官方产品。
 
 CoNest（共栖）面向家庭和小组自托管：以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 的研究原型 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype) 为唯一的工单、Attention 与报告状态机，渠道沿用 Source 接口。宿主 `Members` 模块执行持久化身份绑定、成员私有 Session 和读写范围检查。
 
@@ -25,7 +25,7 @@ English: CoNest is a private research fork of DSH SuperAgent with pinned Weixin 
 - 成员之间的群协作
 - 默认私有的记忆，以及必须显式记录的家庭共享
 - 私有工单的跨成员共享与参与者授权
-- 后台任务，以及带预算上限的长期目标
+- 无需成员授权的后台任务，以及带预算上限的长期目标
 - 微信、WeChat Claw、iLink 的群。官方群能力尚未核实，这里不实现，也不承诺
 
 提示词不能代替隔离。上游已经要求宿主执行允许名单、规则和 Mandate；跨 Source 的“这是同一个人”在原型里只是提示词。CoNest 不能靠提示词把家庭成员隔开。
@@ -36,6 +36,9 @@ English: CoNest is a private research fork of DSH SuperAgent with pinned Weixin 
 - [多用户开发方案](docs/conest/development-plan.md)：Windows 与 WSL 部署、微信优先、约 10 人与 100 个未完成任务的设计，以及成员隔离、hy4 和分阶段验收
 - [M0 运行与验证](docs/conest/m0.md)：微信扫码与 PIN、本机私聊验证、真实 DSH 工具调用、配置与恢复
 - [微信主 Runtime 部署](docs/conest/weixin-runtime.md)：微信进入真实工单、hy4 配置、网页注册、个人空间与恢复
+- [成员定时任务](docs/conest/schedules.md)：私聊和网页用法、飞书群接入、到期及恢复规则
+- [飞书智能寻址](docs/conest/architecture.md#智能寻址)：无需 @ 的群聊响应、多 Bot 配置与模型选择
+- [QQ 机器人接入](docs/conest/octop-qq.md)：QQ 开放平台配置、群聊寻址、成员边界与离线回归
 - [N100 / WSL2 现场步骤](docs/conest/n100-wsl.md)：已确认的设备信息、私有工具链安装与构建检查
 - [Docker 部署](docs/conest/docker.md)：linux/amd64 镜像、数据卷、扫码绑定与主 Runtime 启动
 - [上游来源与更新方式](docs/conest/provenance.md)：精确的上游地址、提交和工具链版本
@@ -59,6 +62,8 @@ pnpm check
 ```
 
 `pnpm check` 依次做类型检查、测试和构建。测试不需要模型 API 密钥。家庭授权测试在 `tests/family-authorization.spec.ts`，随 `pnpm test` 一起跑。
+
+`pnpm test:offline` 在本机验证个人空间、群寻址和 IM 收发接口。个人空间走真实 HTTP 和临时 SQLite，覆盖建单、追问续接、结果和成员隔离。10 个成员提交 100 张工单，在 1 张执行、99 张排队时重启 Runtime，随后重放提交并逐张核对结果。群聊使用合成事件验证 @、回复引用和无 @ 寻址。飞书、微信和 QQ 使用内存传输替身验证入站、回传和重放去重。Agent 工具调用和寻址模型输出均使用预设测试输入，运行无需聊天软件、平台凭据或模型密钥。
 
 微信主链路复用原有 Store、Engine、Ticket、Attention 和 outbox，可禁用 GitHub。`pnpm weixin:setup --web --state-dir /absolute/state` 初始化空成员目录，默认 1 个 worker。管理员打开启动地址后直接进入 **CoNest 后台 → 成员与微信** 创建成员；系统生成二维码，扫码确认后自动保存凭证、关联成员并加入允许名单。每位成员就是一个独立租户，通过管理员交付的一次性链接进入自己的网页，可提交任务、查看结果、回复追问、停止和重试。个人页面默认监听 `127.0.0.1:3089`，DSH 管理端保留在 `127.0.0.1:3088`。原单 owner / `--members-file` 初始化保留兼容。步骤见[微信主 Runtime 文档](docs/conest/weixin-runtime.md)。
 

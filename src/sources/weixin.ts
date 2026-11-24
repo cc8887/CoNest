@@ -16,6 +16,7 @@ export { WeixinConfigSchema, weixinAccounts, weixinActorId, type WeixinConfig } 
 export { WeixinClient } from './weixin-api.ts'
 
 export const WEIXIN = 'weixin'
+export type WeixinTransport = Pick<WeixinClient, 'updates' | 'send'>
 const bound = (config: WeixinConfig | undefined, account: unknown, owner: unknown) => weixinAccounts(config)
   .find(binding => binding.accountId === account && binding.ownerId === owner)
 const sameConfig = (ctx: SourceContext, config: WeixinConfig): boolean => {
@@ -38,7 +39,7 @@ export function weixinTrigger(account: Pick<WeixinAccount, 'id' | 'ownerId'>, me
 }
 
 /** Build a Source with a lazily resolved, host-only context; permits independent instances in tests/profiles. */
-export function createWeixinKind(context: () => SourceContext, client = new WeixinClient()): SourceKind<WeixinConfig> {
+export function createWeixinKind(context: () => SourceContext, client: WeixinTransport = new WeixinClient()): SourceKind<WeixinConfig> {
   return { kind: WEIXIN, title: { zh: '微信', en: 'Weixin' },
     description: { zh: '明确绑定的账号 owner 文本私聊；多成员使用独立绑定和私有路由，共享工单队列。', en: 'Pinned owner DMs with member bindings, private routers and a shared task queue.' },
     schema: WeixinConfigSchema,
@@ -76,11 +77,11 @@ export function createWeixinKind(context: () => SourceContext, client = new Weix
 }
 
 /** Persist messages and the cursor together; the application's receive path is synchronously transactional. */
-export async function pollWeixin(ctx: SourceContext, client: WeixinClient, config: WeixinConfig, signal?: AbortSignal): Promise<number> {
+export async function pollWeixin(ctx: SourceContext, client: WeixinTransport, config: WeixinConfig, signal?: AbortSignal): Promise<number> {
   const counts = await Promise.all(weixinAccounts(config).map(binding => pollAccount(ctx, client, config, binding, signal)))
   return counts.reduce((sum, count) => sum + count, 0)
 }
-async function pollAccount(ctx: SourceContext, client: WeixinClient, config: WeixinConfig, binding: WeixinBinding, signal?: AbortSignal): Promise<number> {
+async function pollAccount(ctx: SourceContext, client: WeixinTransport, config: WeixinConfig, binding: WeixinBinding, signal?: AbortSignal): Promise<number> {
   const account = readWeixinAccount(binding.credentialsFile, binding)
   const cursorKey = KV.weixin.cursor(account.id)
   const batch = await client.updates(account, ctx.state.get(cursorKey) ?? '', signal)
@@ -103,7 +104,7 @@ async function pollAccount(ctx: SourceContext, client: WeixinClient, config: Wei
 }
 
 /** Existing outbox retries cannot blindly repeat an externally uncertain send. Successful chunks remain durable. */
-export async function sendWeixin(ctx: SourceContext, client: WeixinClient, message: OutboundMessage): Promise<'sent' | 'gone'> {
+export async function sendWeixin(ctx: SourceContext, client: WeixinTransport, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const config = ctx.config<WeixinConfig>(WEIXIN)
   const binding = bound(config, message.channel.address.channelId, message.channel.address.conversationId)
   if (!binding || message.channel.source !== WEIXIN || message.channel.address.scope !== 'dm') return 'gone'
@@ -133,7 +134,7 @@ export async function sendWeixin(ctx: SourceContext, client: WeixinClient, messa
 }
 
 /** Poll accounts independently with one credential-file lease each; one failed account does not stop other members. */
-export async function runWeixin(ctx: SourceContext, client: WeixinClient, signal: AbortSignal): Promise<void> {
+export async function runWeixin(ctx: SourceContext, client: WeixinTransport, signal: AbortSignal): Promise<void> {
   await ctx.ready
   if (!ctx.configured()) { ctx.report(WEIXIN, { state: 'paused', detail: 'Waiting for deployment setup' }); return }
   while (!signal.aborted) {
@@ -154,7 +155,7 @@ export async function runWeixin(ctx: SourceContext, client: WeixinClient, signal
     }))) } finally { clearInterval(watch) }
   }
 }
-async function runAccount(ctx: SourceContext, client: WeixinClient, config: WeixinConfig, binding: WeixinBinding, signal: AbortSignal, report: (value: Health) => void): Promise<void> {
+async function runAccount(ctx: SourceContext, client: WeixinTransport, config: WeixinConfig, binding: WeixinBinding, signal: AbortSignal, report: (value: Health) => void): Promise<void> {
   while (!signal.aborted && sameConfig(ctx, config)) {
     let release: (() => Promise<void>) | undefined
     const lease = new AbortController(), lifetime = AbortSignal.any([signal, lease.signal])

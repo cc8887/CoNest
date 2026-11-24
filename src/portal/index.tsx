@@ -2,11 +2,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PersonalSpace, PersonalTask, PersonalView, RegistrationView } from '../app/portal-types.ts'
+import type { PerformanceMetric, PerformanceView, PerformanceWindow } from '../app/performance-types.ts'
 import css from './portal.css?raw'
 
 const style = document.createElement('style'); style.textContent = css; document.head.append(style)
 const boot = JSON.parse(document.getElementById('portal-boot')!.textContent!) as { mode: 'admin' | 'tenant'; id?: string }
 const ADMIN = '/orchestrator/registration/api/members'
+const PERFORMANCE = '/orchestrator/registration/performance'
 const phaseNames: Record<string, string> = { creating: '正在生成二维码', waiting: '等待微信扫码', scanned: '已扫码，请在微信中确认',
   needs_pin: '微信需要验证 PIN', saving: '正在关联个人空间', bound: '微信已绑定', expired: '二维码已过期', failed: '绑定未完成', cancelled: '绑定已取消' }
 const stages: Record<string, string> = { queued: '排队中', working: '执行中', person: '等待确认', idle: '等待继续', ended: '已结束' }
@@ -19,10 +21,20 @@ async function request<T>(path: string, method = 'GET', body?: unknown, admin = 
   if (!response.ok) throw new ApiFailure(response.status, result.error || '暂时无法连接，请稍后重试')
   return result as T
 }
-function useData<T>(load: () => Promise<T>, enabled = true) {
+function useData<T>(load: () => Promise<T>, enabled = true, interval = 1500) {
   const [data, setData] = useState<T>(), [error, setError] = useState<Error>()
-  const reload = useCallback(async () => { try { const value = await load(); setData(value); setError(undefined) } catch (error) { setError(error as Error) } }, [load])
-  useEffect(() => { if (!enabled) return; void reload(); const timer = setInterval(() => { if (!document.hidden) void reload() }, 1500); return () => clearInterval(timer) }, [reload, enabled])
+  const requestId = useRef(0)
+  const reload = useCallback(async () => {
+    const id = ++requestId.current
+    try { const value = await load(); if (id === requestId.current) { setData(value); setError(undefined) } }
+    catch (error) { if (id === requestId.current) setError(error as Error) }
+  }, [load])
+  useEffect(() => {
+    if (!enabled) return
+    void reload()
+    const timer = setInterval(() => { if (!document.hidden) void reload() }, interval)
+    return () => { clearInterval(timer); requestId.current++ }
+  }, [reload, enabled, interval])
   return { data, error, reload }
 }
 function Brand() { return <div className="brand"><span className="brand-mark" aria-hidden>◉</span><span>CoNest<small>共栖 · 私有智能空间</small></span></div> }
@@ -61,6 +73,96 @@ function Binding({ member, admin, perform }: { member: PersonalSpace; admin: boo
         </div></div>}
   </section>
 }
+function FeishuConnection({ base }: { base: string }) {
+  const path = `${base}/feishu-binding`
+  const load = useCallback(() => request<{ status: 'unavailable' | 'unbound' | 'waiting' | 'confirm' | 'bound' }>(path), [path])
+  const { data, reload } = useData(load)
+  const [command, setCommand] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  async function perform(action: 'start' | 'confirm' | 'revoke') {
+    setBusy(true); setError('')
+    try {
+      if (action === 'start') setCommand((await request<{ command: string }>(path, 'POST')).command)
+      else { await request(action === 'confirm' ? `${path}/confirm` : path, action === 'revoke' ? 'DELETE' : 'POST'); setCommand('') }
+      await reload()
+    } catch (error) { setError((error as Error).message) } finally { setBusy(false) }
+  }
+  if (!data || data.status === 'unavailable') return null
+  return <section className="task-section"><div className="section-heading"><h2>连接飞书</h2><span className="hint">{data.status === 'bound' ? '已绑定' : '未绑定'}</span></div>
+    <Notice text={error} />
+    {data.status === 'bound' ? <><p>管理员启用群定时任务后，可在指定飞书群 @ 机器人创建。结果只出现在你的个人空间。</p>
+      <button className="secondary" disabled={busy} onClick={() => void perform('revoke')}>解除飞书绑定</button></>
+      : data.status === 'confirm' ? <><p>已收到来自飞书私聊的指令。若是你本人发送的，请确认绑定。</p>
+        <button disabled={busy} onClick={() => void perform('confirm')}>确认绑定</button></>
+        : <><p>生成配对指令，在五分钟内完整发送给 CoNest 飞书机器人的私聊，不要发送到群里。</p>
+          {data.status === 'waiting' && command && <textarea aria-label="飞书配对指令" readOnly value={command} rows={2} />}
+          <button disabled={busy} onClick={() => void perform('start')}>{data.status === 'waiting' ? '重新生成配对指令' : '生成配对指令'}</button></>}
+  </section>
+}
+function AdminLayout({ page, children }: { page: 'members' | 'performance'; children: ReactNode }) {
+  return <div className="shell"><aside className="sidebar"><Brand /><div className="nav-label">平台管理</div>
+    <nav aria-label="平台管理">
+      <a className={`nav-item console-link ${page === 'members' ? 'active' : ''}`} href="/" aria-current={page === 'members' ? 'page' : undefined}>◇　成员与微信</a>
+      <a className={`nav-item console-link ${page === 'performance' ? 'active' : ''}`} href={PERFORMANCE} aria-current={page === 'performance' ? 'page' : undefined}>性能</a>
+      <a className="nav-item console-link" href="/index.html" target="_blank" rel="noopener noreferrer">⚙　高级控制台 ↗</a>
+    </nav>
+    <div className="sidebar-note">每位成员一个独立空间<br />身份、工单与结果分别保存</div></aside>
+    <main className="main">{children}</main></div>
+}
+
+const metricNames: Record<PerformanceMetric, string> = {
+  wechat_answer: '微信问答响应', foreground_queue: '前台排队', worker_queue: '工单排队',
+  model_call: '模型调用', model_retry: '模型重试', first_token: '首 token', reasoning: '推理输出',
+  wechat_delivery: '微信投递', wechat_send: '微信发送尝试',
+}
+const time = (ms: number | null | undefined) => ms == null ? '—' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`
+
+function PerformancePage() {
+  const [window, setWindow] = useState<PerformanceWindow>('24h')
+  const load = useCallback(() => request<PerformanceView>(`/orchestrator/registration/api/performance?window=${window}`, 'GET', undefined, true), [window])
+  const { data, error, reload } = useData(load, true, 30_000)
+  const groups = data?.window === window ? data.groups : undefined
+  return <AdminLayout page="performance">
+    <header className="hero">
+      <h1>性能</h1><p>按角色和模型查看微信响应、模型调用、排队和投递。</p>
+    </header>
+    <div className="performance-controls">
+      <div role="group" aria-label="统计时段">
+        <button aria-pressed={window === '24h'} className={window === '24h' ? '' : 'secondary'} onClick={() => setWindow('24h')}>过去 24 小时</button>
+        <button aria-pressed={window === '7d'} className={window === '7d' ? '' : 'secondary'} onClick={() => setWindow('7d')}>过去 7 天</button>
+      </div>
+      <button className="secondary" onClick={() => void reload()}>刷新</button>
+    </div>
+    <Notice text={error?.message} />
+    {!error && !groups && <p role="status">正在加载指标…</p>}
+    {groups?.length === 0 && <div className="task-section empty">该时段暂无性能样本。收到新消息或执行工单后将开始统计。</div>}
+    {groups?.map(group => {
+      const title = `${group.role === 'foreground' ? '前台会话' : '后台 worker'} · ${group.model === 'unknown' ? '模型未识别' : group.model}`
+      return <section className="task-section performance-card" key={`${group.role}:${group.model}`} aria-label={title}>
+        <h2>{title}</h2>
+        <div className="performance-table" tabIndex={0} role="region" aria-label={`${title}指标表`}>
+          <table><thead><tr><th scope="col">指标</th><th scope="col">样本数</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">失败率</th></tr></thead>
+            <tbody>{(Object.keys(metricNames) as PerformanceMetric[]).filter(metric => group.role === 'foreground'
+              ? metric !== 'worker_queue' : metric !== 'wechat_answer' && metric !== 'foreground_queue').map(metric => {
+              const summary = group.metrics.find(item => item.metric === metric)
+              return <tr key={metric}><th scope="row">{metricNames[metric]}</th><td>{summary?.samples ?? 0}</td>
+                <td>{time(summary?.p50Ms)}</td><td>{time(summary?.p95Ms)}</td>
+                <td>{summary?.failureRate == null ? '—' : `${(summary.failureRate * 100).toFixed(1)}% (${summary.failures}/${summary.samples})`}</td></tr>
+            })}</tbody></table>
+        </div>
+      </section>
+    })}
+    <details className="performance-notes">
+      <summary>统计口径</summary>
+      <ul>
+        <li>微信问答响应从 CoNest 收到消息计至微信接口确认首条直接答复。</li>
+        <li>首 token 指第一个正文、推理或工具调用片段。推理输出时长是收到首末推理片段的时间差。</li>
+        <li>模型调用按 DSH 发起的流计数，同一步重新发起的流计入模型重试。超时、取消、错误和额度用尽计入失败，失败耗时不参与对应指标的分位数。问答失败率按已排入发件箱的直接答复计算。</li>
+        <li>前台排队计至消息进入模型步骤。工单排队计至 worker 接手。微信投递包含发件箱等待和重试，发送尝试按每次发送单独统计。</li>
+      </ul>
+    </details>
+  </AdminLayout>
+}
+
 function Admin() {
   const load = useCallback(() => request<RegistrationView>(ADMIN, 'GET', undefined, true), [])
   const { data, error, reload } = useData(load)
@@ -85,9 +187,7 @@ function Admin() {
     try { await navigator.clipboard.writeText(invite.url); setNotice('个人访问链接已复制，请私下交给对应成员。') }
     catch { setNotice('请选中下方链接手动复制。') }
   }
-  return <div className="shell"><aside className="sidebar"><Brand /><div className="nav-label">平台管理</div><div className="nav-item active">◇　成员与微信</div>
-    <a className="nav-item console-link" href="/index.html" target="_blank" rel="noopener noreferrer">⚙　高级控制台 ↗</a>
-    <div className="sidebar-note">每位成员一个独立空间<br />身份、工单与结果分别保存</div></aside><main className="main">
+  return <AdminLayout page="members">
     <div className="topline"><span>管理工作台 / 成员</span><span className="pill">管理员</span></div>
     <header className="hero"><span className="eyebrow">A SPACE FOR EVERYONE</span><h1>让每位成员拥有自己的空间</h1><p>创建成员，扫码连接微信。个人任务和结果只对本人可见。</p></header>
     <Notice text={notice || error?.message} />
@@ -108,7 +208,7 @@ function Admin() {
             <p className="hint">链接一天内有效且只能使用一次。请只交给对应成员。</p></>
             : <button className="secondary" disabled={member.status === 'disabled' || !data?.portalOrigin} onClick={() => void perform('invite')}>生成个人访问链接</button>}
         </section></> : <section className="welcome"><span>✦</span><h2>从一位成员开始</h2><p>创建后会自动生成微信二维码和个人入口。</p></section>}</div></div>
-    <footer>CoNest · 每个人都有自己的空间</footer></main></div>
+    <footer>CoNest · 每个人都有自己的空间</footer></AdminLayout>
 }
 function Tenant() {
   const id = boot.id!, base = `/t/${id}/api`
@@ -138,20 +238,25 @@ function Tenant() {
     {(loginError || error) && <p className="hint">请向管理员索取新的个人访问链接。无需填写微信密码。</p>}</section></div>
   const member = data.member
   return <div className="shell"><aside className="sidebar"><Brand /><div className="profile"><span className="avatar large">{member.displayName.slice(0, 1)}</span><strong>{member.displayName}</strong><span>我的个人空间</span></div>
-    <button className={`nav-item ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>▤　我的任务</button><button className={`nav-item ${tab === 'wechat' ? 'active' : ''}`} onClick={() => setTab('wechat')}>◇　微信连接</button>
+    <button className={`nav-item ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>▤　我的任务</button><button className={`nav-item ${tab === 'wechat' ? 'active' : ''}`} onClick={() => setTab('wechat')}>◇　渠道连接</button>
     <button className="logout" onClick={() => void request(`${base}/logout`, 'POST').then(() => location.reload())}>退出个人空间</button></aside><main className="main">
-    <div className="topline"><span>个人空间 / {tab === 'tasks' ? '我的任务' : '微信连接'}</span><span className="pill">仅本人可见</span></div>
-    <header className="hero"><span className="eyebrow">YOUR SPACE, YOUR PACE</span><h1>{tab === 'tasks' ? `你好，${member.displayName}` : '让微信连接你的空间'}</h1><p>{tab === 'tasks' ? '把需要处理的事情交给 CoNest，在这里查看进度与结果。' : '扫码后即可在机器人私聊中发送任务。'}</p></header>
+    <div className="topline"><span>个人空间 / {tab === 'tasks' ? '我的任务' : '渠道连接'}</span><span className="pill">仅本人可见</span></div>
+    <header className="hero"><span className="eyebrow">YOUR SPACE, YOUR PACE</span><h1>{tab === 'tasks' ? `你好，${member.displayName}` : '连接你的消息渠道'}</h1><p>{tab === 'tasks' ? '把需要处理的事情交给 CoNest，在这里查看进度与结果。' : '绑定你的账号，在消息中发起个人任务。'}</p></header>
     <Notice text={notice || error?.message} />
-    {tab === 'wechat' ? <Binding member={member} admin={false} perform={perform} /> : <>
+    {tab === 'wechat' ? <><Binding member={member} admin={false} perform={perform} /><FeishuConnection base={base} /></> : <>
       <div className="stats"><div><span>我的任务</span><strong>{data.total}</strong></div><div><span>微信连接</span><strong className="small-value">{member.bound ? '已绑定' : '待扫码'}</strong></div><div><span>执行方式</span><strong className="small-value">按队列处理</strong></div></div>
       {!member.bound && <div className="connect-banner"><div><strong>把微信也连接进来</strong><p>网页和微信中的任务属于同一个个人空间。</p></div><button className="secondary" onClick={() => setTab('wechat')}>去扫码绑定</button></div>}
       <section className="composer"><h2>新任务</h2><form onSubmit={event => void submit(event)}><label className="sr-only" htmlFor="new-task">描述需要处理的事情</label><textarea id="new-task" placeholder="例如：帮我整理明天出行前的准备清单…" required maxLength={8000} value={text} onChange={event => setText(event.target.value)} rows={3} />
-        <div className="composer-footer"><span>任务和结果只对你可见</span><button disabled={busy}>{busy ? '提交中…' : '提交任务 →'}</button></div></form></section>
+        <div className="composer-footer"><span>定时任务请注明首次执行时间、时区和是否重复</span><button disabled={busy}>{busy ? '提交中…' : '提交任务 →'}</button></div></form></section>
+      <section className="task-section"><div className="section-heading"><h2>定时任务</h2><span className="hint">{data.schedules.length} 个待执行</span></div>
+        {data.schedules.map(schedule => <article className="task-row" key={schedule.id}><div className="task-main"><h3>{schedule.title}</h3>
+          <p>{{ once: '仅一次', daily: '每天', weekly: '每周' }[schedule.repeat]} · 下次执行（本地时间）</p><time dateTime={schedule.nextAt}>{new Date(schedule.nextAt).toLocaleString('zh-CN')}</time></div>
+          <button className="secondary" onClick={() => void perform(`schedules/${schedule.id}/cancel`)}>取消定时</button></article>)}
+      </section>
       <section className="task-section"><div className="section-heading"><h2>任务记录</h2><span className="hint">自动更新</span></div>
         {!data.tasks.length && <div className="empty">还没有任务。写下第一件想交给 CoNest 的事吧。</div>}
         {data.tasks.map(task => <article className="task-row" key={task.id}><div className="task-main"><span className={`task-stage stage-${task.stage}`}>{task.ended === 'completed' ? '已完成' : stages[task.stage]}</span>
-          <h3>{task.title}</h3><p>{task.question || task.summary.slice(0, 150) || '已加入处理队列'}</p><time>{new Date(task.createdAt).toLocaleString('zh-CN')}</time></div>
+          <h3>{task.title}</h3>{(task.question || task.summary) && <p>{task.question || task.summary.slice(0, 150)}</p>}<time>{new Date(task.createdAt).toLocaleString('zh-CN')}</time></div>
           <button className="secondary" onClick={() => { setOpened(task); setAnswer('') }}>{task.question ? '回复问题' : task.ended ? '查看结果' : '查看进度'}</button></article>)}
         <div className="pagination"><button className="text-button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>上一页</button><span>{data.total ? offset + 1 : 0}–{Math.min(offset + 20, data.total)} / {data.total}</span>
           <button className="text-button" disabled={data.nextOffset === null} onClick={() => setOffset(data.nextOffset!)}>下一页</button></div>
@@ -159,11 +264,13 @@ function Tenant() {
     <footer>这是你的独立空间，其他成员无法查看这里的任务。</footer></main>
     {opened && <Modal title={opened.title} close={() => setOpened(undefined)}>
       <div className="section-heading"><h2>{opened.title}</h2><button className="text-button" aria-label="关闭" onClick={() => setOpened(undefined)}>✕</button></div>
-      <div className="result-text">{opened.summary || '任务正在处理中。'}</div>
+      <p className="hint">{opened.ended === 'completed' ? '已完成' : stages[opened.stage]}{opened.turnElapsedMs === undefined ? '' : ` · 本轮执行 ${Math.floor(opened.turnElapsedMs / 1000)} 秒`}</p>
+      {opened.summary && <div className="result-text">{opened.summary}</div>}
       {opened.question && <form onSubmit={event => void submit(event, opened.id)}><label htmlFor="answer">{opened.question}</label><textarea id="answer" value={answer} onChange={event => setAnswer(event.target.value)} required maxLength={8000} rows={3} /><button disabled={busy}>发送回复</button></form>}
       <div className="button-row">{opened.canRetry && <button className="secondary" onClick={() => void perform(`tasks/${opened.id}/retry`).then(() => setOpened(undefined))}>重试任务</button>}
         {opened.canStop && <button className="text-button danger" onClick={() => void perform(`tasks/${opened.id}/stop`).then(() => setOpened(undefined))}>停止任务</button>}</div>
     </Modal>}
   </div>
 }
-createRoot(document.getElementById('root')!).render(boot.mode === 'admin' ? <Admin /> : <Tenant />)
+createRoot(document.getElementById('root')!).render(boot.mode === 'tenant' ? <Tenant />
+  : location.pathname.replace(/\/$/, '') === PERFORMANCE ? <PerformancePage /> : <Admin />)

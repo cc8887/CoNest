@@ -7,13 +7,14 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import { key, liveTicket, type Ticket } from '../core/index.ts'
-import { mandateInstructions, ticketOfSession } from '../executor/dsh.ts'
+import { mandateInstructions, ticketOfSession, workerSessionId } from '../executor/dsh.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { AgentDelivery, messageId } from './delivery.ts'
 import type { Effects } from './effects.ts'
+import type { PerformanceMetrics } from './performance.ts'
 import type { Variable } from './execution-environment.ts'
 import { RetryHealth } from './retry-health.ts'
-import { bindRouterModel, initializeRoleModel } from './role-models.ts'
+import { initializeRoleModel, selectRouterModel } from './role-models.ts'
 import { bundledSkills, promptFile } from './skill-files.ts'
 import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
@@ -25,6 +26,7 @@ import type { Members } from './members.ts'
 export interface SessionsHost {
   /** DSH Cordis context: sessions, agents, persistence, and their events. */
   readonly context: Context
+  readonly performance?: Pick<PerformanceMetrics, 'admit' | 'watch'>
   readonly store: Pick<Store, 'tickets' | 'settings' | 'get' | 'set' | 'keys'>
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'compose' | 'skills'>
   readonly effects: Pick<Effects, 'enqueue' | 'handle' | 'idle' | 'pending'>
@@ -45,10 +47,12 @@ export interface SessionsHost {
  * What Sessions registered for an agent it decorated: the releases of its prompt section, tools and skill scope, the scope
  * its skills are registered in, and the skills of one prompt revision; for a worker's subagent, only its tool limits.
  */
-interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { revision: number; dispose: () => void }; subagent?: true }
+interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { revision: number; dispose: () => void };
+  subagent?: true; turnStartedAt?: number }
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
-export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
+export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router',
+  MEMBER_PRESET = 'dsh-superagent-member'
 const privateRouting = promptFile('private-router')
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -125,16 +129,25 @@ export class Sessions {
       const agent = ctx.agents.get(session.id)
       const binding = agent && agent.session === session ? this.bindings.get(agent) : undefined
       if (!agent || !binding || binding.subagent) return
+      if (event.type === 'turn/start') binding.turnStartedAt = event.time
+      if (event.type === 'turn/end') binding.turnStartedAt = undefined
+      this.host.performance?.admit(agent, event)
       this.retryHealth.observe(agent.id, event)
       this.updateModelHealth()
     })
-    ctx.on('agent/created', async ({ agent }) => { await this.decorate(agent); return undefined })
+    ctx.on('agent/created', async ({ agent }) => {
+      if (this.host.members?.isRouter(agent.id)) await selectRouterModel(ctx, agent, this.host.store.settings().eval.model)
+      await this.decorate(agent)
+      return undefined
+    })
     // Opening a Session in DSH's Web UI before its first turn may select the default preset for it: select ours again. After
     // its first turn DSH refuses any selection, which leaves it as it is.
     ctx.inject(['agentPresets'], child => {
       child.on('agent-preset/selected', (sessionId, preset) => {
         const ticketId = ticketOfSession(sessionId), agent = ctx.agents.get(sessionId as SessionId)
-        const ours = sessionId === this.host.masterId || this.host.members?.isRouter(sessionId) ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
+        const role = sessionId === this.host.masterId || this.host.members?.isRouter(sessionId) ? 'orchestrator'
+          : ticketId && this.host.store.tickets.get(ticketId) ? 'worker' : undefined
+        const ours = role && this.preset(role)
         if (!ours || preset === ours || !agent) return
         const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
         presets.select(agent, ours).catch(() => {})
@@ -144,6 +157,15 @@ export class Sessions {
       if (status === 'idle' && !this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
     })
   }
+  private preset(role: 'orchestrator' | 'worker'): string {
+    if (this.host.members?.isolated()) return MEMBER_PRESET
+    return role === 'worker' ? WORKER_PRESET : ROUTER_PRESET
+  }
+  /** Start of the live worker turn, if observed in this Runtime. */
+  workerTurnStartedAt(ticketId: string): number | undefined {
+    const agent = this.ctx.agents.get(workerSessionId(ticketId) as SessionId)
+    return agent && this.bindings.get(agent)?.turnStartedAt
+  }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
   async ensure(id: string, cwd: string, title: string, role: 'orchestrator' | 'worker'): Promise<Agent> {
     const ctx = this.ctx
@@ -152,12 +174,14 @@ export class Sessions {
       const workspace = await ctx.workspaceRegistry.create(cwd)
       // A Session keeps the preset it was created with, one of the bundle's own (cordis.patch.yml).
       await ctx.sessionController.create({ sessionId: id as SessionId, workspaceId: workspace.id,
-        agentPreset: role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
+        agentPreset: this.preset(role) })
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
-    if (!this.host.members?.isRouter(id)) {
-      const settings = this.host.store.settings()
+    const settings = this.host.store.settings()
+    if (this.host.members?.isRouter(id)) {
+      await selectRouterModel(ctx, result.agent, settings.eval.model)
+    } else {
       await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
     }
     await this.decorate(result.agent)
@@ -263,7 +287,10 @@ export class Sessions {
     if (!master && !ticket) { this.limitSubagent(agent); return }
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
-    if (privateRouter) binding.disposers.push(...bindRouterModel(this.ctx, agent, () => host.store.settings().eval.model))
+    if (host.performance && (ticket || privateRouter || (master && !host.members?.isolated() && host.store.settings().sources.weixin?.enabled))) {
+      binding.disposers.push(host.performance.watch(agent, ticket ? 'worker' : 'foreground',
+        ticket ? () => host.store.tickets.get(ticket.id) : undefined))
+    }
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
     this.updateModelHealth()

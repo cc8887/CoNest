@@ -15,18 +15,22 @@ export const feishuChatLink = (brand: 'feishu' | 'lark', chatId: string): string
  */
 const gone = (error: unknown): boolean => error instanceof CliError && error.code !== undefined && (error.code === 230011
   || /withdrawn/i.test(error.message) || (Math.floor(error.code / 100) === 2300 && /not found/i.test(error.message)))
-/** Replies in the topic of the target message; Feishu keeps at most one reply per idempotency key (the outgoing message's `message.id`). */
-export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
-  const messageId = message.channel.address.messageId
-  if (!messageId) throw new Error('Missing Feishu reply target')
-  const text = checkedImText(message.text)
-  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--reply-in-thread', '--idempotency-key', message.id]
+export type FeishuReply = (reply: { messageId: string; text: string; id: string }) => Promise<'sent' | 'gone'>
+
+const replyThroughCli = (host: Pick<SourceContext, 'commands'>): FeishuReply => async ({ messageId, text, id }) => {
+  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--reply-in-thread', '--idempotency-key', id]
   try { await host.commands.lark(reply) }
   catch (error) {
     if (gone(error)) return 'gone'
     throw error
   }
   return 'sent'
+}
+/** Replies in the target topic with the outbox message ID as the idempotency key. */
+export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message: OutboundMessage, reply = replyThroughCli(host)): Promise<'sent' | 'gone'> {
+  const messageId = message.channel.address.messageId
+  if (!messageId) throw new Error('Missing Feishu reply target')
+  return reply({ messageId, text: checkedImText(message.text), id: message.id })
 }
 /** Fallback chat link on the bot's brand; the message's own deep link on its Trigger is preferred when available. */
 export const feishuLink = (address: Record<string, string>, links: ChannelLinks): ChannelLink => ({

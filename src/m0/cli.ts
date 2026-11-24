@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     }
     model = await DshProbe.start(loadModel(), root)
     if (command === 'model') {
-      const evidence = { at: new Date().toISOString(), dsh: '0.2.1-alpha.2', ...(await model.run('Run the probe and reply exactly OK.', shutdown.signal)) }
+      const evidence = { at: new Date().toISOString(), dsh: '0.2.2-rc.5', ...(await model.run('Run the probe and reply exactly OK.', shutdown.signal)) }
       if (evidence.text.trim() !== 'OK' || evidence.toolCalls !== 1 || evidence.modelCalls < 2) throw new Error('Unexpected DSH smoke result')
       writeFileSync(join(root, 'model-evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
       console.log(JSON.stringify(evidence, null, 2))

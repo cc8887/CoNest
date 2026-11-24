@@ -1,77 +1,73 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import { agentEvents, installModelSelection, type Agent, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { AgentModel, type ModelSelection } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import { bindRouterModel, initializeRoleModel } from '../src/app/role-models.ts'
+import { initializeRoleModel, selectRouterModel } from '../src/app/role-models.ts'
+
 const contexts: Context[] = []
-afterEach(async () => { await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose())); vi.restoreAllMocks() })
-async function fixture() {
-  const ctx = new Context(); contexts.push(ctx); await ctx.plugin(SystemPrompt)
-  const resolve = vi.fn(async value => value)
+afterEach(async () => { await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose())) })
+
+function fixture() {
+  const ctx = new Context(); contexts.push(ctx)
+  const defaultEffort = ReasoningEffortId('high')
+  const resolve = vi.fn(async (value: ModelSelection) => ({ reasoningEffort: defaultEffort, ...value }))
   const flush = vi.fn(async () => {})
   ctx.reflect.provide('llm', { resolveCallConfig: resolve })
   ctx.reflect.provide('sessionPersistence', { flush })
   const session = Session.create(SessionId('role-model'))
-  const agent = { ctx, session } as Agent
-  const host: ModelSelectionRef = { get current() { return session.requestHeader()?.config ?? { provider: 'host', model: 'default', reasoningEffort: ReasoningEffortId('high') } }, assembled: undefined }
-  installModelSelection(ctx, host)
-  const request = () => agentEvents(ctx, agent).waterfall('agent/request', { turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ provider: 'seed', model: 'seed' }))
-  const record = (selection: ModelSelection) => { const event = session.append('request/header', { header: { config: selection }, reason: 'initial' }); ctx.emit('session/event', session, event) }
-  return { ctx, agent, host, resolve, flush, request, record }
+  const options = { provider: 'host', model: 'default', reasoningEffort: defaultEffort }
+  const model = new AgentModel(() => {
+    const pending = session.snapshotEvents().findLast(event => event.type === 'model/selection')?.data ?? null
+    return { pending, lastUsed: session.requestHeader()?.config ?? null }
+  }, session, options)
+  const agent = { session, model, options }
+  return { ctx, agent, resolve, flush, options }
 }
-it('keeps prompt variables and initial routing on the role model without saving the host default', async () => {
-  const { ctx, agent, request, record, flush } = await fixture()
-  await initializeRoleModel(ctx, agent, { provider: 'worker-provider', model: 'worker-model' })
-  expect((await ctx.systemPrompt.assemble()).variables).toMatchObject({ provider: 'worker-provider', model: 'worker-model' })
-  const selected = await request()
-  expect(selected).toEqual({ provider: 'worker-provider', model: 'worker-model' })
-  expect(agent.session.snapshotEvents().some(event => event.type === 'model/selection')).toBe(true)
+
+it('persists a new worker choice without pinning the adapter default effort or changing the host default', async () => {
+  const { ctx, agent, flush, options } = fixture()
+  const worker = { provider: 'worker-provider', model: 'worker-model' }
+  await initializeRoleModel(ctx, agent, worker)
+  expect(agent.model.current()).toEqual(worker)
+  expect(agent.session.snapshotEvents()).toEqual([expect.objectContaining({ type: 'model/selection', data: worker })])
   expect(flush).toHaveBeenCalledOnce()
-  record(selected)
-  // A retry of the same assembled step keeps the same model even after the header is persisted.
-  expect(await request()).toEqual(selected)
-  await ctx.systemPrompt.assemble()
-  expect(await request()).toEqual(selected)
+  expect(options).toMatchObject({ provider: 'host', model: 'default' })
+
+  const manual = { provider: 'manual', model: 'other', reasoningEffort: ReasoningEffortId('low') }
+  agent.model.select(manual)
+  await initializeRoleModel(ctx, agent, worker)
+  expect(agent.model.current()).toEqual(manual)
 })
-it('lets a later explicit selection win without changing the in-flight assembled step', async () => {
-  const { ctx, agent, host, request } = await fixture()
-  await initializeRoleModel(ctx, agent, { provider: 'worker', model: 'one' })
-  await ctx.systemPrompt.assemble()
-  const manual = { provider: 'manual', model: 'two', reasoningEffort: ReasoningEffortId('low') }
-  Object.defineProperty(host, 'current', { value: manual, configurable: true })
-  const event = agent.session.append('model/selection', manual); ctx.emit('session/event', agent.session, event)
-  expect(await request()).toEqual({ provider: 'worker', model: 'one' })
-  await ctx.systemPrompt.assemble()
-  expect(await request()).toEqual(manual)
-})
+
 it.each(['header', 'selection'])('preserves a resumed Session with existing %s', async kind => {
-  const { ctx, agent, resolve } = await fixture()
+  const { ctx, agent, resolve } = fixture()
   const existing = { provider: 'existing', model: 'keep' }
   if (kind === 'header') agent.session.append('request/header', { header: { config: existing }, reason: 'initial' })
-  else agent.session.append('model/selection', existing)
+  else agent.model.select(existing)
   await initializeRoleModel(ctx, agent, { provider: 'worker', model: 'new' })
   expect(resolve).not.toHaveBeenCalled()
+  expect(agent.model.current()).toEqual(existing)
 })
-it('uses the configured model for the next step of an existing private router', async () => {
-  const { ctx, agent, request, record } = await fixture()
-  record({ provider: 'conest', model: 'hy4', reasoningEffort: ReasoningEffortId('high') })
-  let configured = { provider: 'conest', model: 'hy4-flash' }
-  bindRouterModel(ctx, agent, () => configured)
-  expect((await ctx.systemPrompt.assemble()).variables).toMatchObject(configured)
-  const first = configured
-  configured = { provider: 'conest', model: 'hy4' }
-  expect(await request()).toEqual(first)
-  await ctx.systemPrompt.assemble()
-  expect(await request()).toEqual(configured)
+
+it('refreshes a private router before the next delivery and restores the host route when unset', async () => {
+  const { ctx, agent, options } = fixture()
+  const configured = { provider: 'conest', model: 'hy4-flash', reasoningEffort: ReasoningEffortId('low') }
+  agent.model.select({ provider: 'conest', model: 'hy4', reasoningEffort: ReasoningEffortId('high') })
+  await selectRouterModel(ctx, agent, configured)
+  await selectRouterModel(ctx, agent, configured)
+  expect(agent.model.current()).toEqual(configured)
+  expect(agent.session.snapshotEvents()).toHaveLength(2)
+
+  await selectRouterModel(ctx, agent, null)
+  expect(agent.model.current()).toEqual(options)
 })
-it('inherits the host when unset and fails unavailable routes before recording a selection', async () => {
-  const { ctx, agent, resolve, request } = await fixture()
+
+it('inherits the host for an unconfigured worker and fails unavailable routes before recording a selection', async () => {
+  const { ctx, agent, resolve, options } = fixture()
   await initializeRoleModel(ctx, agent, null)
-  await ctx.systemPrompt.assemble()
-  expect(await request()).toMatchObject({ provider: 'host', model: 'default' })
+  expect(agent.model.current()).toEqual(options)
   resolve.mockRejectedValueOnce(new Error('unknown provider'))
   await expect(initializeRoleModel(ctx, agent, { provider: 'unknown', model: 'x' })).rejects.toThrow('unknown provider')
-  expect(agent.session.snapshotEvents().some(event => event.type === 'model/selection')).toBe(false)
+  expect(agent.session.snapshotEvents()).toHaveLength(0)
 })

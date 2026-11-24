@@ -63,6 +63,80 @@ async function fixture(database?: string) {
   return { accounts, config, incoming, sent, client, source, routers, poll, route, idle, directory }
 }
 
+it('lets a private router schedule future work instead of starting it immediately', async () => {
+  const f = await fixture(), [account, other] = [f.accounts[0]!, f.accounts[1]!]
+  const incoming = message(account, 'schedule', '请明天上午九点生成一份清单')
+  f.incoming.set(account.id, [incoming]); f.incoming.set(other.id, [message(other, 'another-request')]); await f.poll()
+  const trigger = weixinTrigger(account, incoming, true)!
+  await waitUntil(() => f.routers.slice(0, 2).every(id => h!.tools.get(id)?.has('orchestrator_schedule_create')))
+  const runAt = new Date(Date.now() + 86_400_000).toISOString()
+  const args = { trigger_id: trigger.id, title: '生成清单', instructions: '生成一份清单', run_at: runAt, repeat: 'once' }
+  await expect(h!.runTool(f.routers[1]!, 'orchestrator_schedule_create', args)).rejects.toThrow(/inaccessible/i)
+  await expect(h!.runTool(f.routers[0]!, 'orchestrator_schedule_create', { ...args, run_at: '2026-12-01T09:00:00' })).rejects.toThrow()
+  await expect(h!.runTool(f.routers[0]!, 'orchestrator_schedule_create', { ...args, run_at: '2020-01-01T00:00:00Z' })).rejects.toThrow(/future/)
+  const scheduled = await h!.runTool(f.routers[0]!, 'orchestrator_schedule_create', args)
+  expect(scheduled).toMatchObject({ status: 'scheduled', nextAt: runAt })
+  expect(await h!.runTool(f.routers[0]!, 'orchestrator_schedule_create', args)).toEqual(scheduled)
+  await h!.runtime.idle()
+  expect(f.sent.map(item => item.bot)).toEqual([account.id])
+  expect(h!.runtime.store.tickets.list()).toEqual([])
+  const fresh = message(account, 'new-context')
+  f.incoming.set(account.id, [fresh]); await f.poll()
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(runAt) + 1)
+  const { runtime } = h!
+  await runtime.pump(); await runtime.idle()
+  const [ticket] = runtime.store.tickets.list(), worker = `worker-${ticket!.id}`
+  await h!.runTool(worker, 'orchestrator_report', { state: 'ready', summary: '定时生成的私有清单', human_action: null })
+  f.idle(worker); await runtime.idle()
+  await h!.runTool(f.routers[0]!, 'orchestrator_reply', { purpose: 'result', ticket_id: ticket!.id, text: '定时生成的私有清单' })
+  await runtime.pump(); await runtime.idle()
+  expect(f.sent).toHaveLength(2)
+  expect(f.sent[1]).toMatchObject({ bot: account.id, body: { msg: { to_user_id: account.ownerId, context_token: fresh.context_token,
+    item_list: [expect.objectContaining({ text_item: { text: '定时生成的私有清单' } })] } } })
+})
+
+it('restores due schedules after restart, coalesces missed runs, and shares one worker without overlapping a recurrence', async () => {
+  let f = await fixture()
+  const first = Date.now() + 60_000, day = 86_400_000
+  for (const account of f.accounts.slice(0, 2)) f.incoming.set(account.id, [message(account, 'start', `计划 ${account.ownerId}`)])
+  await f.poll()
+  const ids: string[] = []
+  for (const [index, account] of f.accounts.slice(0, 2).entries()) {
+    const trigger = weixinTrigger(account, message(account, 'start'), true)!
+    const result = await h!.runTool(f.routers[index]!, 'orchestrator_schedule_create', { trigger_id: trigger.id,
+      title: `任务 ${index}`, instructions: `仅处理 ${account.ownerId}`, repeat: index === 0 ? 'daily' : 'once', run_at: new Date(first).toISOString() })
+    ids.push(String(result.id))
+  }
+  await h!.runtime.idle()
+  await h!.runtime.settings.pause(true, 'tool')
+  const database = join(temporary(), 'scheduled.sqlite')
+  h!.runtime.store.db.prepare('VACUUM INTO ?').run(database)
+  await h!.stop(); h = undefined
+  f = await fixture(database)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(first + 2 * day)
+  await h!.runtime.pump(); await h!.runtime.idle()
+  expect(h!.runtime.store.tickets.list()).toHaveLength(0)
+  await h!.runtime.settings.pause(false, 'tool')
+  await h!.runtime.idle()
+  const { runtime } = h!, tickets = runtime.store.tickets.list()
+  expect(tickets).toHaveLength(2)
+  expect(executorLoad(runtime.store, runtime.executor.activeCount())).toEqual({ running: 1, queued: 1 })
+  for (const [index, id] of ids.entries()) {
+    const record = runtime.store.get(KV.schedules.record(`member-${index}`, id))!
+    expect(record.status).toBe(index === 0 ? 'scheduled' : 'dispatched')
+    expect(record.nextAt).toBe(index === 0 ? first + 3 * day : undefined)
+    const ticket = runtime.store.tickets.get(record.lastTicketId!)!
+    expect(runtime.members.canMemberTicket(`member-${index}`, ticket.id)).toBe(true)
+    expect(runtime.members.canMemberTicket(`member-${1 - index}`, ticket.id)).toBe(false)
+    const trigger = runtime.store.triggers.get(ticket.origin.triggerId)!
+    expect(trigger.text).toBe(`仅处理 user-${index}`)
+    expect(trigger.channel?.address.conversationId).toBe(`user-${index}`)
+  }
+  clock.mockReturnValue(first + 4 * day)
+  await runtime.pump(); await runtime.idle(); await runtime.pump()
+  expect(runtime.store.tickets.list()).toHaveLength(2)
+})
+
 it('separates ten bound identities, their private router inputs, reads, questions, followups and original-DM results', async () => {
   const f = await fixture()
   for (const account of f.accounts) f.incoming.set(account.id, [message(account, 'same-id')])
@@ -223,11 +297,13 @@ it('initializes a multi-member Store with pinned credentials and refuses disable
   const trigger = weixinTrigger(f.accounts[0]!, message(f.accounts[0]!, 'before-disable'), true)!
   const ticket = await f.route(0, trigger.id), deliveries = f.sent.length
   const gate = deferred()
-  h!.controller.inspect.mockImplementationOnce(async () => { await gate.promise; return { events: [] } })
+  h!.sessionQuery.observeSession.mockImplementationOnce(async () => { await gate.promise; return { events: [], [Symbol.dispose]: () => {} } })
   const pendingRead = h!.runTool(f.routers[0]!, 'orchestrator_read', { resource: `ticket/${ticket}/transcript`, offset: 0 })
   const revokedRead = expect(pendingRead).rejects.toThrow('inaccessible')
   const disabled = { ...f.config, members: f.config.members!.map((member, index) => index ? member : { ...member, status: 'disabled' as const }) }
   const settings = h!.runtime.store.settings()
+  h!.runtime.outbox.send({ id: 'queued-before-revocation', ticketId: ticket, channel: trigger.channel!, text: 'revoked result', kind: 'reply' })
+  expect(h!.runtime.outbox.status('queued-before-revocation')).toBe('pending')
   h!.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, weixin: { enabled: true, config: disabled } } })
   gate.resolve(); await revokedRead
   f.incoming.set(f.accounts[0]!.id, [message(f.accounts[0]!, 'disabled')])
@@ -236,6 +312,9 @@ it('initializes a multi-member Store with pinned credentials and refuses disable
   await expect(h!.runTool(f.routers[0]!, 'orchestrator_read', { resource: 'tickets', offset: 0 })).rejects.toThrow('inaccessible')
   await expect(h!.runTool(`worker-${ticket}`, 'orchestrator_report', { state: 'ready', summary: 'revoked result', human_action: null })).rejects.toThrow('inaccessible')
   expect(await sendWeixin(f.source, f.client, { id: 'revoked-send', channel: trigger.channel!, text: 'revoked result', kind: 'reply' })).toBe('gone')
+  await h!.runtime.pump()
+  await h!.runtime.idle()
+  expect(h!.runtime.store.receipts.get('queued-before-revocation')).toMatchObject({ status: 'dropped', dropped: { reason: 'channelIgnored' } })
   expect(f.sent).toHaveLength(deliveries)
 })
 
