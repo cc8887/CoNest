@@ -2,6 +2,17 @@
 
 `v0.2.0-alpha.2` 面向 N100 的 `linux/amd64`，提供每位成员独立租户的网页注册、微信扫码绑定、个人任务页面、共享工单队列和可在工单执行期间继续对话的微信前台。前台默认使用 `hy4-flash`，后台共享一个 `hy4` worker。镜像包含 Node 24.22.3、固定 DSH 0.2.1-alpha.2 和已构建的 CoNest；宿主无需安装 Node 或 pnpm。它是预发布版，N100 真机与多个真实微信账号仍待现场验收。旧 `v0.1.0-m0.1` 只支持一位 owner。
 
+## 从指定提交打包
+
+给包含 `Docker package` 工作流的目标提交打 `docker-v<版本>` 标签，再推送该标签。版本支持 `0.2.0` 和 `0.2.0-alpha.3` 这类格式。
+
+```bash
+git tag docker-v0.2.0-alpha.3 <commit-sha>
+git push origin refs/tags/docker-v0.2.0-alpha.3
+```
+
+在 GitHub 的 **Actions → Docker package** 中打开对应运行，从 **Artifacts** 下载镜像归档和 `SHA256SUMS`。工作流在上传前执行 Linux 镜像冒烟和重启检查。正式预发布仍由 `v*` 标签触发，附件可在 Releases 里下载。
+
 ## 下载与启动
 
 本仓库为私有仓库，下载需要有权限的 GitHub 账号。从同一 Release 下载所有附件到独立目录：镜像归档、源码、Compose、模型模板、DOCKER.md、VALIDATION.json 和 SHA256SUMS。
