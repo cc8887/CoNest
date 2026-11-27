@@ -100,7 +100,6 @@ export class Portal {
     const config = this.config()
     this.save({ ...config, members: config.members!.map(member => member.id === id ? { ...member, status } : member) }, () => {
       if (status === 'disabled') {
-        this.host.store.set(KV.portal.epoch(id), (this.host.store.get(KV.portal.epoch(id)) ?? 0) + 1)
         this.host.store.delete(KV.portal.invite(id))
         const record = this.host.store.get(KV.portal.binding(id))
         if (record && !terminal(record.phase)) this.host.store.set(KV.portal.binding(id), { ...record, phase: 'cancelled', ticket: undefined, qr: undefined })

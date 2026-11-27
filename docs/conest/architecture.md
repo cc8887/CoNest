@@ -35,6 +35,14 @@
 
 成员模式中新建的受管理 Session 使用 `dsh-superagent-member` preset，包含时间上下文和压缩插件，角色工具由宿主注册到各自的 Agent。已经执行过的 Session 由 DSH 锁定原 preset，恢复时仍经过宿主工具限制和授权检查。个人空间的工单进度可显示当前 worker turn 的耗时，计时来自 DSH 会话事件，工单阶段来自 Store。
 
+## 主动跟进授权接口
+
+首版**默认不需要逐条审批**。只为「主动跟进一张现有私有工单」保留授权接口，不接入模型工具、自动监听、工单触发、消息推送或审批页面。普通问答、Attention 和已明确委托的定时计划不受影响。需要逐条审批时，在 DSH profile 的 `dsh-superagent` 插件配置中设置 `requireFollowUpApproval: true` 并重启；省略该键或设为 `false` 则不要求成员逐条批准。
+
+- 可信宿主通过 `runtime.followUpAuthorization.request(memberId, ticketId)` 查询或登记。默认对有效成员自己的未结束工单返回 `not_required`，不写入审批记录。启用审批后，新请求返回 `pending`；同一工单在同一成员凭据版本下最多有一条记录，重试复用。待审批记录保存在现有 SQLite，重启可恢复，不占 worker，也不自动通知。
+- 个人空间会话可 `GET /t/<memberId>/api/tasks/<ticketId>/follow-up-authorization` 查询。要求审批但尚未登记时返回 `not_requested`。同一路径 `POST` 提交 `{"requestId":"<查询返回的 ID>","decision":"grant"}`，也可用 `deny` 拒绝或用 `revoke` 撤销已批准的请求。沿用个人会话及 `x-conest-request: 1` 检查；跨租户工单不可见，无效或过期的状态变更返回 409。
+- `pending` 和 `granted` 最多有效至登记后 24 小时，工单结束也会失效；停用成员使旧记录失效，重新启用不恢复旧授权。切回免审批模式不会覆盖有效成员凭据版本下的明确拒绝或撤销。将来接入监听时，宿主必须在执行前重新调用 `allows(memberId, ticketId)`，只有 `not_required` 或 `granted` 才能通过此审批检查；仍不得超出租户权限去读数据、推送或对外写入。
+
 ## 离线渠道测试
 
 `pnpm test:offline` 包含飞书、微信和 QQ 的内存传输测试。飞书注入解码后的实时事件并捕获话题回复，微信注入账号收件批次并捕获发件参数，QQ 注入连接事件并捕获带原消息 ID 和序号的被动回复。三个替身都接到正式 Source，租户授权、Session 路由、定时任务、发件箱和 SQLite 沿用真实 Runtime。测试使用临时状态和合成账号，模型行为由测试预设。

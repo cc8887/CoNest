@@ -11,7 +11,7 @@ import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
-/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` or portal listener settings remounts the plugin. */
+/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart; other changes remount the plugin. */
 export const Config = s.object({
   stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
   portalHost: s.string().default('127.0.0.1').description('Personal tenant listener, separate from DSH management. A concrete IP; remote listeners require TLS.'),
@@ -19,6 +19,7 @@ export const Config = s.object({
   portalOrigin: s.string().default('').description('Optional public HTTPS origin of a reverse proxy forwarding only the personal portal.'),
   portalTlsCertFile: s.string().default('').description('Optional absolute TLS certificate file for the personal portal.'),
   portalTlsKeyFile: s.string().default('').description('Optional absolute TLS key file for the personal portal.'),
+  requireFollowUpApproval: s.boolean().default(false).description('Require member approval before following up on an eligible private ticket.'),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
     .description('Largest saved prompt configuration, in characters.').volatile(),
   admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
@@ -30,6 +31,7 @@ export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
   stateDir: string
   portal?: { host: string; port: number; origin?: string; certFile?: string; keyFile?: string }
+  requireFollowUpApproval: boolean
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
@@ -44,8 +46,8 @@ const MOVED: Record<string, string> = {
 export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs,
+  const { stateDir, requireFollowUpApproval, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
+  return { stateDir, requireFollowUpApproval, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs,
     portal: { host: config.portalHost, port: config.portalPort, origin: config.portalOrigin, certFile: config.portalTlsCertFile, keyFile: config.portalTlsKeyFile } }
 }
 

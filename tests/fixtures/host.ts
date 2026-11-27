@@ -139,6 +139,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
  * @param options.stateDir - a caller-owned directory whose database survives stop and can be reopened.
  */
 export async function startRuntime(seed?: (store: Store) => void, options: { database?: string; stateDir?: string; members?: readonly string[]; portal?: boolean;
+  requireFollowUpApproval?: boolean;
   weixin?: WeixinClient; llmStream?: Context['llm']['stream']; qq?: Omit<OctopTransportOptions, 'accountId'>; qqTransport?: QqTransportFactory;
   feishuReply?: FeishuReply } = {}) {
   const directory = options.stateDir ?? mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
@@ -268,7 +269,8 @@ export async function startRuntime(seed?: (store: Store) => void, options: { dat
       seed?.(seeded)
     } finally { seeded.close() }
   }
-  const runtime = new Runtime(ctx, testMachine({ stateDir: directory, ...options.portal ? { portal: { host: '127.0.0.1', port: 0 } } : {} }), vi.fn(),
+  const runtime = new Runtime(ctx, testMachine({ stateDir: directory, requireFollowUpApproval: options.requireFollowUpApproval ?? false,
+    ...options.portal ? { portal: { host: '127.0.0.1', port: 0 } } : {} }), vi.fn(),
     { weixin: options.weixin, bindingPollMs: options.weixin ? 10 : undefined, qq: options.qq, qqTransport: options.qqTransport })
   await runtime.ready
   runtime.sources.register(options.feishuReply ? createFeishuKind(options.feishuReply) : feishuKind)

@@ -4,14 +4,16 @@
 
 ## 从指定提交打包
 
-给包含 `Docker package` 工作流的目标提交打 `docker-v<版本>` 标签，再推送该标签。版本支持 `0.2.0` 和 `0.2.0-alpha.3` 这类格式。
+给包含有效 `Docker package` 工作流的目标提交打标签，再推送该标签。标签使用 `docker-v主版本.次版本.补丁版本`，三个版本段均由数字组成。可以加预发布后缀，例如 `docker-v0.2.0-alpha.4`。后缀以连字符分隔，首字符须为 ASCII 字母或数字，其余字符可以是 ASCII 字母、数字、点或连字符。
 
 ```bash
-git tag docker-v0.2.0-alpha.3 <commit-sha>
-git push origin refs/tags/docker-v0.2.0-alpha.3
+git tag -a docker-v0.2.0-alpha.5 <commit-sha> -m "Build CoNest Docker package"
+git push origin refs/tags/docker-v0.2.0-alpha.5
 ```
 
 在 GitHub 的 **Actions → Docker package** 中打开对应运行，从 **Artifacts** 下载镜像归档和 `SHA256SUMS`。工作流在上传前执行 Linux 镜像冒烟和重启检查。正式预发布仍由 `v*` 标签触发，附件可在 Releases 里下载。
+
+`on.push.tags` 使用 GitHub Actions 的 glob 语法。当前过滤器匹配数字版本和以字母或数字开头的后缀，完整后缀由 Bash 正则校验。早期把 `[a-zA-Z0-9.-]+` 写入 glob，末尾的连字符被当作字符范围的起点，导致 GitHub 在分配 runner 前拒绝工作流。修改过滤器后可先运行 `actionlint .github/workflows/docker-package.yml`。如果已推送的标签指向配置有误的提交，请为修正后的提交创建并推送新标签。
 
 ## 下载与启动
 

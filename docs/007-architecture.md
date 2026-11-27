@@ -338,6 +338,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/feishu-group-routing.ts` | Feishu smart-group intake, scoped context, sender rechecks and delivery deduplication |
 | `src/app/group-address-model.ts` | A bounded, tool-free DSH stream for deciding who a group message addresses |
 | `src/app/schedules.ts` | Member-owned schedules, transactional due-ticket creation, and Feishu group confirmation checks |
+| `src/app/follow-up-authorization.ts` | Optional, durable approvals for a member's private ticket; no per-ticket approval by default and no autonomous execution |
 | `src/app/portal.ts` | Browser enrollment, private credential persistence, one-time access links, tenant sessions and scoped task operations |
 | `src/app/portal-types.ts` | Credential-free registration and personal-page contracts |
 | `src/app/portal-http.ts` | DSH-authenticated registration and a separate-origin personal HTTP server |

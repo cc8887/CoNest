@@ -8,12 +8,14 @@ import type { Machine } from '../deployment.ts'
 import { isLoopbackHost, isWildcardHost } from '@deepseek-ai/dsh-host-webserver'
 import { Portal, PortalError } from './portal.ts'
 import type { GroupIdentity } from './group-identity.ts'
+import type { FollowUpAuthorization } from './follow-up-authorization.ts'
 import type { PerformanceView, PerformanceWindow } from './performance-types.ts'
 
 export const PORTAL_ADMIN_PATH = '/orchestrator/registration'
 const field = z.object({ displayName: z.string().trim().min(1).max(100) }).strict()
 const pin = z.object({ attempt: z.string().min(1).max(100), pin: z.string().regex(/^\d{4,16}$/) }).strict()
 const safeId = /^[A-Za-z0-9_-]{1,80}$/
+const followUpDecision = z.object({ requestId: z.uuid(), decision: z.enum(['grant', 'deny', 'revoke']) }).strict()
 const script = () => readFileSync(new URL('./lib/portal.js', import.meta.resolve('dsh-superagent/package.json')), 'utf8')
 function html(mode: 'admin' | 'tenant', id?: string, title = mode === 'admin' ? '成员与微信绑定' : '个人空间'): string {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>CoNest · ${title}</title></head><body><div id="root"></div><script id="portal-boot" type="application/json">${JSON.stringify({ mode, id })}</script><script src="${mode === 'admin' ? PORTAL_ADMIN_PATH : ''}/assets/portal.js" defer></script></body></html>`
@@ -91,7 +93,8 @@ export async function registrationHttp(req: IncomingMessage, res: ServerResponse
 export class PortalServer {
   private server?: Server
   private publicOrigin?: string
-  constructor(private readonly portal: Portal, private readonly config: NonNullable<Machine['portal']>, private readonly groupIdentity?: GroupIdentity) {}
+  constructor(private readonly portal: Portal, private readonly config: NonNullable<Machine['portal']>, private readonly groupIdentity?: GroupIdentity,
+    private readonly followUpAuthorization?: FollowUpAuthorization) {}
   get origin(): string | undefined { return this.publicOrigin }
   async start(): Promise<void> {
     const { host, port, origin, certFile, keyFile } = this.config
@@ -152,6 +155,22 @@ export class PortalServer {
     }
     if (method === 'POST' && parts.length === 6 && action === 'tasks' && ['stop', 'retry'].includes(parts[5]!)) {
       this.portal.action(id, idFrom(parts[4]), parts[5] as 'stop' | 'retry'); respond(res, 200, { ok: true }); return
+    }
+    if (parts.length === 6 && action === 'tasks' && parts[5] === 'follow-up-authorization' && this.followUpAuthorization) {
+      const ticketId = idFrom(parts[4])
+      if (method === 'GET') {
+        const state = this.followUpAuthorization.read(id, ticketId)
+        if (!state) throw new PortalError(404, '工单不存在')
+        respond(res, 200, state); return
+      }
+      if (method === 'POST') {
+        const { requestId, decision } = followUpDecision.parse(await body(req))
+        this.portal.authenticate(id, token)
+        if (!this.followUpAuthorization.read(id, ticketId)) throw new PortalError(404, '工单不存在')
+        const state = this.followUpAuthorization.decide(id, ticketId, requestId, decision)
+        if (!state) throw new PortalError(409, '授权请求不存在、已失效或状态已改变')
+        respond(res, 200, state); return
+      }
     }
     if (method === 'POST' && parts.length === 6 && action === 'schedules' && parts[5] === 'cancel') {
       this.portal.cancelSchedule(id, idFrom(parts[4])); respond(res, 200, { ok: true }); return

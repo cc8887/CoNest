@@ -96,9 +96,10 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 | `portalHost` / `portalPort` | no | CoNest personal tenant listener, default `127.0.0.1:3089`, separate from DSH management. A concrete IP is required; non-loopback listeners require TLS |
 | `portalOrigin` | no | Canonical public HTTPS origin for a proxy forwarding only the personal portal; no path or trailing slash. Preserve this Host through the proxy |
 | `portalTlsCertFile` / `portalTlsKeyFile` | no | TLS certificate and key for a direct personal listener; both required together. Restart after changing portal settings |
+| `requireFollowUpApproval` | no | Defaults to `false`: eligible private tickets need no individual follow-up approval. Set to `true` to require the owning member's approval. Restart after changing it. This does not enable autonomous listening |
 | `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
 
-After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Volatile machine-limit changes apply without restart. `stateDir` and the personal portal listener fields require a plugin restart; they are not part of that limits editor. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
+After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Volatile machine-limit changes apply without restart. `stateDir`, the personal portal listener fields, and `requireFollowUpApproval` require a plugin restart; they are not part of that limits editor. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
 
 ## Start and stop
 

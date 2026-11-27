@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import type { PersonalView } from '../src/app/portal-types.ts'
+import { FollowUpAuthorization } from '../src/app/follow-up-authorization.ts'
 import { ticketOfSession, workerSessionId } from '../src/executor/dsh.ts'
+import { KV } from '../src/kv.ts'
 import { startRuntime, type Host } from './fixtures/host.ts'
 
 const alice = 'offline-alice', bob = 'offline-bob'
@@ -17,7 +19,7 @@ function workerIdle(host: Host, sessionId: string): void {
   host.ctx.emit('agent/status', { agent, status: 'idle' } as never)
 }
 
-function startPersonal(members: string[], stateDir?: string) {
+function startPersonal(members: string[], stateDir?: string, requireFollowUpApproval?: boolean) {
   return startRuntime(store => {
     const settings = store.settings()
     store.saveSettings({ ...settings, sources: {
@@ -26,7 +28,7 @@ function startPersonal(members: string[], stateDir?: string) {
       weixin: { enabled: false, config: { accounts: [], members: members.map(id => ({ id, displayName: '同名成员', status: 'active' })) } },
       personal: { enabled: true, config: {} },
     }, executor: { ...settings.executor, maxWorkers: 1 } })
-  }, { portal: true, stateDir })
+  }, { portal: true, stateDir, requireFollowUpApproval })
 }
 
 function personalHttp(host: Host) {
@@ -106,6 +108,128 @@ it('runs two private tenants through HTTP intake, one-slot dispatch, a queued an
     await host.runtime.idle()
     expect(await state(alice, aliceCookie)).toEqual(finalAlice)
     expect(host.relays(aliceWorker).filter(relay => relay.text === answer)).toHaveLength(1)
+  } finally {
+    await host.stop()
+  }
+}, 20_000)
+
+it('needs no approval by default without granting access to another member or a stopped ticket', async () => {
+  const host = await startPersonal([alice, bob])
+  try {
+    const { http, login, openTicket, state } = personalHttp(host)
+    const aliceCookie = await login(alice), bobCookie = await login(bob)
+    const ticket = await openTicket(alice, aliceCookie, 'approval-not-required', aliceTask)
+    const path = `tasks/${ticket}/follow-up-authorization`, authorization = host.runtime.followUpAuthorization
+    const before = await state(alice, aliceCookie), deliveries = host.deliveries.mock.calls.length
+    expect(authorization.request(alice, ticket)).toEqual({ status: 'not_required' })
+    expect(authorization.allows(alice, ticket)).toBe(true)
+    expect(host.runtime.store.get(KV.followUpAuthorization(ticket))).toBeUndefined()
+    expect(await (await http(alice, path, aliceCookie)).json()).toEqual({ status: 'not_required' })
+    expect((await http(alice, path, aliceCookie, 'POST', { requestId: '9f9ee69f-c52f-4c20-be12-77fa2e7e616f', decision: 'grant' })).status).toBe(409)
+    expect(authorization.request(bob, ticket)).toBeUndefined()
+    expect(authorization.allows(bob, ticket)).toBe(false)
+    expect((await http(bob, path, bobCookie)).status).toBe(404)
+    await host.runtime.idle()
+    expect(await state(alice, aliceCookie)).toEqual(before)
+    expect(host.deliveries.mock.calls).toHaveLength(deliveries)
+
+    expect((await http(alice, `tasks/${ticket}/stop`, aliceCookie, 'POST')).status).toBe(200)
+    expect(authorization.request(alice, ticket)).toBeUndefined()
+    expect(authorization.allows(alice, ticket)).toBe(false)
+  } finally {
+    await host.stop()
+  }
+}, 20_000)
+
+it('waits for the owning member’s follow-up authorization when enabled across restart without starting work', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'conest-authorization-'))
+  let host: Host | undefined
+  try {
+    host = await startPersonal([alice, bob], stateDir, true)
+    let api = personalHttp(host)
+    const aliceCookie = await api.login(alice), bobCookie = await api.login(bob)
+    const ticket = await api.openTicket(alice, aliceCookie, 'authorization-request', aliceTask)
+    const path = `tasks/${ticket}/follow-up-authorization`
+    const authorization = host.runtime.followUpAuthorization
+    expect(await (await api.http(alice, path, aliceCookie)).json()).toEqual({ status: 'not_requested' })
+    expect(authorization.allows(alice, ticket)).toBe(false)
+    expect((await api.http(alice, path)).status).toBe(401)
+    expect(authorization.request(bob, ticket)).toBeUndefined()
+    const before = await api.state(alice, aliceCookie)
+    const pending = authorization.request(alice, ticket)!
+    if (pending.status !== 'pending') throw new Error('Expected a pending request')
+    const grant = { requestId: pending.requestId, decision: 'grant' }
+    expect(authorization.request(alice, ticket)).toEqual(pending)
+    expect(authorization.allows(alice, ticket)).toBe(false)
+    expect((await api.http(bob, path, bobCookie)).status).toBe(404)
+    expect((await api.http(bob, path, bobCookie, 'POST', grant)).status).toBe(404)
+    expect((await api.http(alice, path, bobCookie, 'POST', grant)).status).toBe(401)
+    await host.runtime.idle()
+    expect(await api.state(alice, aliceCookie)).toEqual(before)
+
+    await host.stop()
+    host = await startPersonal([alice, bob], stateDir, true)
+    api = personalHttp(host)
+    expect(await (await api.http(alice, path, aliceCookie)).json()).toEqual(pending)
+    expect((await api.http(alice, path, aliceCookie, 'POST', { ...grant, requestId: '9f9ee69f-c52f-4c20-be12-77fa2e7e616f' })).status).toBe(409)
+    const deliveries = host.deliveries.mock.calls.length
+    const afterRestart = await api.state(alice, aliceCookie)
+    const approved = await api.http(alice, path, aliceCookie, 'POST', grant)
+    expect(approved.status).toBe(200)
+    expect(await approved.json()).toEqual({ ...pending, status: 'granted' })
+    expect(host.runtime.followUpAuthorization.allows(alice, ticket)).toBe(true)
+    expect(await (await api.http(alice, path, aliceCookie, 'POST', grant)).json()).toEqual({ ...pending, status: 'granted' })
+    expect(await (await api.http(alice, path, aliceCookie, 'POST', { ...grant, decision: 'revoke' })).json()).toEqual({ ...pending, status: 'revoked' })
+    expect(host.runtime.followUpAuthorization.allows(alice, ticket)).toBe(false)
+    expect((await api.http(alice, path, aliceCookie, 'POST', grant)).status).toBe(409)
+    await host.runtime.idle()
+    expect(host.deliveries.mock.calls).toHaveLength(deliveries)
+    expect(await api.state(alice, aliceCookie)).toEqual(afterRestart)
+
+    await host.stop()
+    host = await startPersonal([alice, bob], stateDir)
+    api = personalHttp(host)
+    expect(await (await api.http(alice, path, aliceCookie)).json()).toEqual({ ...pending, status: 'revoked' })
+    expect(host.runtime.followUpAuthorization.allows(alice, ticket)).toBe(false)
+  } finally {
+    try { await host?.stop() } finally { rmSync(stateDir, { recursive: true, force: true }) }
+  }
+}, 20_000)
+
+it('rejects denied, expired, stopped, and prior membership requests', async () => {
+  const host = await startPersonal([alice, bob], undefined, true)
+  try {
+    const { http, login, openTicket } = personalHttp(host)
+    const cookie = await login(alice)
+    let now = Date.now()
+    const authorization = new FollowUpAuthorization(host.runtime.store, host.runtime.members, true, () => now)
+    const request = async (key: string) => {
+      const ticket = await openTicket(alice, cookie, key, key)
+      const state = authorization.request(alice, ticket)
+      if (state?.status !== 'pending') throw new Error('Expected a pending request')
+      return { ticket, ...state }
+    }
+    const denied = await request('denied')
+    expect(authorization.decide(alice, denied.ticket, denied.requestId, 'deny')?.status).toBe('denied')
+    expect(authorization.request(alice, denied.ticket)?.status).toBe('denied')
+    expect(authorization.decide(alice, denied.ticket, denied.requestId, 'grant')).toBeUndefined()
+
+    const expired = await request('expired')
+    now = expired.expiresAt
+    expect(authorization.read(alice, expired.ticket)?.status).toBe('expired')
+    expect(authorization.decide(alice, expired.ticket, expired.requestId, 'grant')).toBeUndefined()
+
+    const stopped = await request('stopped')
+    expect((await http(alice, `tasks/${stopped.ticket}/stop`, cookie, 'POST')).status).toBe(200)
+    expect(authorization.read(alice, stopped.ticket)?.status).toBe('expired')
+    expect(authorization.decide(alice, stopped.ticket, stopped.requestId, 'grant')).toBeUndefined()
+
+    const suspended = await request('suspended')
+    expect((await host.registration('POST', `api/members/${alice}/status`, { status: 'disabled' })).status).toBe(200)
+    expect(authorization.read(alice, suspended.ticket)).toBeUndefined()
+    expect((await host.registration('POST', `api/members/${alice}/status`, { status: 'active' })).status).toBe(200)
+    expect(authorization.read(alice, suspended.ticket)).toEqual({ status: 'not_requested' })
+    expect(authorization.decide(alice, suspended.ticket, suspended.requestId, 'grant')).toBeUndefined()
   } finally {
     await host.stop()
   }

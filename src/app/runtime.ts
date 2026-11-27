@@ -52,6 +52,7 @@ import { GroupIdentity, isFeishuPairingMessage } from './group-identity.ts'
 import { FeishuGroupRouting } from './feishu-group-routing.ts'
 import { Portal } from './portal.ts'
 import { PortalServer } from './portal-http.ts'
+import { FollowUpAuthorization } from './follow-up-authorization.ts'
 import type { WeixinClient } from '../sources/weixin-api.ts'
 import { personalKind, personalTrigger } from '../sources/personal.ts'
 import { WeixinConfigSchema } from '../sources/weixin-config.ts'
@@ -89,6 +90,7 @@ export class Runtime extends Service implements SourceHost {
   readonly masterId: string
   readonly members: Members
   readonly portal: Portal
+  readonly followUpAuthorization: FollowUpAuthorization
   readonly portalServer?: PortalServer
   private readonly sourceLinks = new TextCache(200_000)
   private readonly stopped = new AbortController()
@@ -124,6 +126,7 @@ export class Runtime extends Service implements SourceHost {
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
       const members = this.members = new Members(store, masterId)
+      const followUpAuthorization = this.followUpAuthorization = new FollowUpAuthorization(store, members, machine.requireFollowUpApproval)
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
       const board = this.board
       const effects = this.effects = new Effects(store, board)
@@ -193,8 +196,9 @@ export class Runtime extends Service implements SourceHost {
           const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
           const followup = followed ? followupNotice(store, sources, event.data.triggerId) : undefined
           if (followup) sessions.relay(followup.id, followup.text)
-          // Notify the ticket's conversations whenever it ends via a pull request.
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
+          if (ended) followUpAuthorization.close(ended.id)
+          // Notify the ticket's conversations whenever it ends via a pull request.
           if (ended && setup.configured()) {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
             for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
@@ -257,7 +261,7 @@ export class Runtime extends Service implements SourceHost {
         receive: trigger => passes.receive(trigger), requestPass: () => passes.request() }, adapters.weixin, { pollMs: adapters.bindingPollMs })
       if (machine.portal) {
         this.disposers.push(sources.register(personalKind(id => !!WeixinConfigSchema.parse(store.settings().sources.weixin?.config ?? {}).members?.some(member => member.id === id && member.status === 'active'))))
-        this.portalServer = new PortalServer(this.portal, machine.portal, groupIdentity)
+        this.portalServer = new PortalServer(this.portal, machine.portal, groupIdentity, followUpAuthorization)
       }
       const qqOptions = machine.portal && (adapters.qq ?? qqLaunch())
       const qqTransport = machine.portal && (adapters.qqTransport ?? (qqOptions

@@ -9,6 +9,7 @@ import type { Retry } from './sources/github.ts'
 import type { BindingRecord, PortalAccess, PortalInvite } from './app/portal.ts'
 import type { FeishuMemberBinding, FeishuPairing, GroupMatch, GroupScheduleOrigin } from './app/group-identity.ts'
 import type { Schedule } from './app/schedules.ts'
+import type { FollowUpAuthorizationRecord } from './app/follow-up-authorization.ts'
 
 /** Key of a KV record whose value has type `V`; a plain string represents an untyped key. */
 export type Key<V> = string & { readonly __value?: V }
@@ -41,6 +42,7 @@ export const KV = {
     feishuBinding: family<FeishuMemberBinding>('member-feishu-binding:'), groupMatch: family<GroupMatch>('member-group-match:') },
   schedules: { record: family<Schedule, [member: string, id: string]>('schedule:'),
     active: family<number, [member: string, id: string]>('active-schedule:'), group: family<GroupScheduleOrigin>('group-schedule-request:') },
+  followUpAuthorization: family<FollowUpAuthorizationRecord, [ticket: string]>('follow-up-authorization:'),
   /** Portal: private QR jobs and hashed personal access credentials; never exposed to model tools. */
   portal: { binding: family<BindingRecord, [member: string]>('portal-binding:'),
     invite: family<PortalInvite, [member: string]>('portal-invite:'), access: family<PortalAccess, [digest: string]>('portal-access:'),

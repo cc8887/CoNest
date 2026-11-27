@@ -37,6 +37,7 @@ English: CoNest is a private research fork of DSH SuperAgent with pinned Weixin 
 - [M0 运行与验证](docs/conest/m0.md)：微信扫码与 PIN、本机私聊验证、真实 DSH 工具调用、配置与恢复
 - [微信主 Runtime 部署](docs/conest/weixin-runtime.md)：微信进入真实工单、hy4 配置、网页注册、个人空间与恢复
 - [成员定时任务](docs/conest/schedules.md)：私聊和网页用法、飞书群接入、到期及恢复规则
+- [主动跟进授权接口](docs/conest/architecture.md#主动跟进授权接口)：默认不需要逐条审批，可配置为持久化等待成员决定；尚未接入主动监听
 - [飞书智能寻址](docs/conest/architecture.md#智能寻址)：无需 @ 的群聊响应、多 Bot 配置与模型选择
 - [QQ 机器人接入](docs/conest/octop-qq.md)：QQ 开放平台配置、群聊寻址、成员边界与离线回归
 - [N100 / WSL2 现场步骤](docs/conest/n100-wsl.md)：已确认的设备信息、私有工具链安装与构建检查

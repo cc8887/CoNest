@@ -43,6 +43,13 @@ export class Members {
   sync(settings: Settings): void {
     this.validate(settings)
     const config = this.config(settings)
+    const enabled = new Set(config.accounts ? config.members?.filter(member => member.status === 'active').map(member => member.id) : [])
+    for (const member of this.config().members ?? []) {
+      if (member.status === 'active' && !enabled.has(member.id)) {
+        const epoch = KV.portal.epoch(member.id)
+        this.store.set(epoch, (this.store.get(epoch) ?? 0) + 1)
+      }
+    }
     if (!config.accounts) return
     for (const member of config.members ?? []) {
       const name = KV.members.session(member.id)
