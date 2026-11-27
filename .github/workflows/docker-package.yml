@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   docker-package:
@@ -29,12 +30,20 @@ jobs:
           printf 'value=%s\n' "${GITHUB_REF_NAME#docker-v}" >> "$GITHUB_OUTPUT"
           printf 'revision=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           platforms: linux/amd64
           load: true
-          tags: conest:${{ steps.version.outputs.value }}
+          tags: |
+            conest:${{ steps.version.outputs.value }}
+            ghcr.io/${{ github.repository_owner }}/conest:${{ steps.version.outputs.value }}
+            ghcr.io/${{ github.repository_owner }}/conest:latest
           build-args: |
             VERSION=${{ steps.version.outputs.value }}
             REVISION=${{ steps.version.outputs.revision }}
@@ -44,6 +53,12 @@ jobs:
         env:
           IMAGE_VERSION: ${{ steps.version.outputs.value }}
         run: bash scripts/docker-smoke.sh "conest:$IMAGE_VERSION"
+      - name: Push image to GHCR
+        env:
+          IMAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker push "ghcr.io/${GITHUB_REPOSITORY_OWNER}/conest:$IMAGE_VERSION"
+          docker push "ghcr.io/${GITHUB_REPOSITORY_OWNER}/conest:latest"
       - name: Save image archive
         env:
           IMAGE_VERSION: ${{ steps.version.outputs.value }}
